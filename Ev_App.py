@@ -1772,9 +1772,7 @@ if selected == "Book Slot":
     </div>""", unsafe_allow_html=True)
 
     try:
-        bunk_data = pd.read_csv("ev_bunks.csv")
-
-        bunk_data = bunk_data[["bunk_name", "state", "city"]].sort_values("bunk_name")
+        bunk_data = read_sql_df("SELECT bunk_name,state,city FROM ev_bunks ORDER BY bunk_name")
         if bunk_data.empty:
             st.markdown("""
             <div style="text-align:center; padding:60px 20px;">
