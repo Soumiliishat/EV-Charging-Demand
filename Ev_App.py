@@ -1880,10 +1880,13 @@ if selected == "Book Slot":
                     st.warning("Please complete the advance payment first.")
                 else:
                     try:
+                        bs_slot_date_str = bs_slot_date.strftime("%Y-%m-%d")
+                        bs_slot_time_str = bs_slot_time.strftime("%H:%M:%S")
+
                         existing_slot = read_sql_df(
                             "SELECT * FROM slot_bookings WHERE bunk_name=? AND slot_date=? AND slot_time=?",
-                            (bs_bunk, bs_slot_date, bs_slot_time)
-                        )
+                            (bs_bunk, bs_slot_date_str, bs_slot_time_str)
+)
                         if not existing_slot.empty:
                             st.error("&#128683; This slot is already booked. Please choose a different time.")
                         else:
@@ -1893,7 +1896,7 @@ if selected == "Book Slot":
                                  charging_type,estimated_price,advance_amount,payment_method,payment_status)
                                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
                             """, (bs_bunk, bs_customer_name, bs_customer_phone, bs_vehicle_type,
-                                  bs_slot_date, bs_slot_time, bs_charging_type,
+                                  bs_slot_date_str, bs_slot_time_str, bs_charging_type,
                                   bs_est_price, bs_adv_amount, bs_payment_method,
                                   st.session_state.payment_status))
                             st.success(f"&#9989; Slot booked successfully at {bs_bunk}!")
