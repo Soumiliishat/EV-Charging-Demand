@@ -5,29 +5,26 @@ import pickle
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-import mysql.connector
 from streamlit_option_menu import option_menu
 from streamlit_folium import st_folium
+import sqlite3
+import os
 import qrcode
 from PIL import Image
 from pathlib import Path
 import base64
  
-# ─────────────────────────────────────────
-# MYSQL HELPERS
-# ─────────────────────────────────────────
+DB_PATH = "ev_project.db"   # SQLite file — no server needed, works on Streamlit Cloud
+ 
 def get_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root",
-        database="ev_project"
-    )
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
  
 def read_sql_df(query, params=None):
     conn = get_connection()
     try:
-        return pd.read_sql(query, conn, params=params)
+        return pd.read_sql_query(query, conn, params=params)
     finally:
         conn.close()
  
@@ -35,7 +32,7 @@ def execute_sql(query, values=None):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(query, values)
+        cursor.execute(query, values or [])
         conn.commit()
     finally:
         cursor.close()
@@ -44,59 +41,54 @@ def execute_sql(query, values=None):
 def init_database():
     conn = get_connection()
     cursor = conn.cursor()
+ 
+    # SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT  (not INT AUTO_INCREMENT)
+    # SQLite uses TEXT  instead of VARCHAR(255)
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS ev_bunks (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        bunk_name VARCHAR(255) UNIQUE,
-        owner_name VARCHAR(255),
-        state VARCHAR(255),
-        city VARCHAR(255),
-        address TEXT,
-        total_machines INT DEFAULT 0,
-        fast_chargers INT DEFAULT 0,
-        normal_chargers INT DEFAULT 0,
-        damaged_machines INT DEFAULT 0,
-        working_machines INT DEFAULT 0,
-        contact VARCHAR(20),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
+CREATE TABLE IF NOT EXISTS ev_bunks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bunk_name        TEXT UNIQUE,
+    owner_name       TEXT,
+    state            TEXT,
+    city             TEXT,
+    address          TEXT,
+    total_machines   INTEGER DEFAULT 0,
+    fast_chargers    INTEGER DEFAULT 0,
+    normal_chargers  INTEGER DEFAULT 0,
+    damaged_machines INTEGER DEFAULT 0,
+    working_machines INTEGER DEFAULT 0,
+    contact          TEXT,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)""")
+ 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS slot_bookings (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        bunk_name VARCHAR(255),
-        customer_name VARCHAR(255),
-        phone VARCHAR(20),
-        vehicle_type VARCHAR(100),
-        slot_date DATE,
-        slot_time TIME,
-        charging_type VARCHAR(50),
-        estimated_price FLOAT,
-        advance_amount FLOAT,
-        payment_method VARCHAR(100),
-        payment_status VARCHAR(50) DEFAULT 'Pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
+CREATE TABLE IF NOT EXISTS slot_bookings (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bunk_name        TEXT,
+    customer_name    TEXT,
+    phone            TEXT,
+    vehicle_type     TEXT,
+    slot_date        DATE,
+    slot_time        TIME,
+    charging_type    TEXT,
+    estimated_price  REAL,
+    advance_amount   REAL,
+    payment_method   TEXT,
+    payment_status   TEXT DEFAULT 'Pending',
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)""")
+ 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(100) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        full_name VARCHAR(255),
-        email VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
-    for cmd in [
-        "ALTER TABLE ev_bunks ADD UNIQUE (bunk_name)",
-        "ALTER TABLE ev_bunks ADD COLUMN damaged_machines INT DEFAULT 0",
-        "ALTER TABLE ev_bunks ADD COLUMN working_machines INT DEFAULT 0",
-        "ALTER TABLE slot_bookings ADD COLUMN advance_amount FLOAT",
-        "ALTER TABLE slot_bookings ADD COLUMN payment_method VARCHAR(100)",
-        "ALTER TABLE slot_bookings ADD COLUMN payment_status VARCHAR(50) DEFAULT 'Pending'"
-    ]:
-        try:
-            cursor.execute(cmd)
-        except mysql.connector.Error:
-            pass
+CREATE TABLE IF NOT EXISTS users (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT UNIQUE NOT NULL,
+    password   TEXT NOT NULL,
+    full_name  TEXT,
+    email      TEXT,
+    role       TEXT DEFAULT 'User',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)""")
+ 
     conn.commit()
     cursor.close()
     conn.close()
@@ -746,16 +738,14 @@ def _register_user(username, password, full_name, email):
     try:
         execute_sql(
             """
-            INSERT INTO users (full_name, email, username, password, role)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
+INSERT INTO users (full_name, email, username, password, role)
+VALUES (?, ?, ?, ?, ?)
+""",
             (full_name.strip(), email.strip(), username.strip(), password, "User")
         )
         return True, "Account created successfully! You can now sign in."
-
-    except mysql.connector.errors.IntegrityError:
+    except sqlite3.IntegrityError:
         return False, "Username or email already exists."
-
     except Exception as e:
         return False, f"Registration failed: {e}"
 
@@ -949,7 +939,6 @@ def login_page():
                 ok, msg = _register_user(reg_username, reg_pw1, reg_fullname, reg_email)
                 if ok:
                     st.success(f"✅ {msg}")
-                    st.balloons()
                 else:
                     st.error(f"❌ {msg}")
 
