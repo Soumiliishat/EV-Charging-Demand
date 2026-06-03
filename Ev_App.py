@@ -14,6 +14,9 @@ from PIL import Image
 from pathlib import Path
 import base64
  
+# ─────────────────────────────────────────
+# SQLITE HELPERS  (replaces MySQL helpers)
+# ───────────────────────────────────────── 
 DB_PATH = "ev_project.db"   # SQLite file — no server needed, works on Streamlit Cloud
  
 def get_connection():
@@ -712,38 +715,36 @@ if "payment_status"   not in st.session_state: st.session_state.payment_status =
 # LOGIN PAGE
 # ─────────────────────────────────────────
 def _ensure_users_table():
-    """Create users table if not exists (safe to call without full init_database)."""
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
+    """SQLite users table for Streamlit Cloud. No MySQL server needed."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id INT AUTO_INCREMENT PRIMARY KEY,
-            full_name VARCHAR(255),
-            email VARCHAR(255) UNIQUE,
-            username VARCHAR(255) UNIQUE,
-            password VARCHAR(255),
-            role VARCHAR(50) DEFAULT 'User',
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            full_name TEXT,
+            email TEXT UNIQUE,
+            role TEXT DEFAULT 'User',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """)
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception:
-        pass
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def _register_user(username, password, full_name, email):
+    _ensure_users_table()
     try:
         execute_sql(
             """
-INSERT INTO users (full_name, email, username, password, role)
-VALUES (?, ?, ?, ?, ?)
-""",
+            INSERT INTO users (full_name, email, username, password, role)
+            VALUES (?, ?, ?, ?, ?)
+            """,
             (full_name.strip(), email.strip(), username.strip(), password, "User")
         )
-        return True, "Account created successfully! You can now sign in."
+        return True, "Account created successfully! Please log in now."
     except sqlite3.IntegrityError:
         return False, "Username or email already exists."
     except Exception as e:
@@ -751,64 +752,89 @@ VALUES (?, ?, ?, ?, ?)
 
 
 def _verify_user(username, password):
+    _ensure_users_table()
     try:
         df_u = read_sql_df(
             """
             SELECT * FROM users
-            WHERE username = %s
-            AND password = %s
-            AND LOWER(role) = 'user'
+            WHERE username = ? AND password = ? AND LOWER(role) = 'user'
             """,
             (username.strip(), password)
         )
-
         return not df_u.empty
-
     except Exception:
         return False
 
 
-def login_page():
+# Intro and auth state
+if "intro_done" not in st.session_state: st.session_state.intro_done = False
+if "auth_mode" not in st.session_state: st.session_state.auth_mode = "login"
+
+
+def _video_base64(path):
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return None
+
+
+def intro_page():
+    """Full-screen splash video. Clicking Enter App opens the auth page."""
     st.markdown("""
     <style>
-    .block-container {
-        padding-top: 2.5rem !important;
-        max-width: 500px !important;
+    .block-container {padding:0 !important; max-width:100% !important;}
+    [data-testid="stHeader"], footer {display:none !important;}
+    .intro-shell{position:fixed; inset:0; overflow:hidden; background:#020712;}
+    .intro-video{position:absolute; inset:0; width:100vw; height:100vh; object-fit:contain; background:#020712;}
+    .intro-overlay{position:absolute; inset:0; background:linear-gradient(90deg,rgba(2,7,18,.72),rgba(2,7,18,.18),rgba(2,7,18,.72));}
+    .intro-content{position:fixed; z-index:2; inset:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px;}
+    .intro-badge{padding:8px 18px; border-radius:999px; background:rgba(0,229,184,.12); border:1px solid rgba(0,229,184,.32); color:#00E5B8; font-weight:800; letter-spacing:.10em; font-size:12px; text-transform:uppercase;}
+    .intro-title{font-family:'Syne',sans-serif; font-size:70px; line-height:1.05; font-weight:900; color:white; margin:18px 0 12px; letter-spacing:-.05em;}
+    .intro-title span{color:#00E5B8;}
+    .intro-sub{color:#B8C7D9; font-size:18px; max-width:720px; line-height:1.7; margin-bottom:32px;}
+    /* Center only one Enter App button over the video */
+    .stButton{position:fixed !important; left:50% !important; top:85% !important; transform:translateX(-50%) !important; z-index:10 !important; width:230px !important;}
+    .stButton>button{height:56px !important; border-radius:999px !important; font-weight:900 !important; font-size:17px !important; border:1px solid rgba(0,229,184,.45) !important; background:linear-gradient(135deg,#00E5B8,#38C8F8) !important; color:#020712 !important; box-shadow:0 12px 40px rgba(0,229,184,.34) !important;}
+    @media (max-width: 768px){
+        .intro-title{font-size:48px;}
+        .intro-sub{font-size:15px;}
+        .stButton{top:72% !important; width:210px !important;}
     }
-    [data-testid="stAppViewContainer"]::after {
-        content: '';
-        position: fixed;
-        inset: 0;
-        background: radial-gradient(ellipse 60% 60% at 50% 40%, rgba(0,229,184,0.06) 0%, transparent 70%);
-        pointer-events: none;
-        z-index: 0;
-    }
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        background: rgba(12,20,36,0.80) !important;
-        border-radius: 14px !important;
-        padding: 4px !important;
-        border: 1px solid rgba(0,229,184,0.14) !important;
-        gap: 4px !important;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 10px !important;
-        font-family: 'Syne', sans-serif !important;
-        font-weight: 700 !important;
-        font-size: 14px !important;
-        color: #8BA0BA !important;
-        padding: 10px 24px !important;
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #00E5B8, #38C8F8) !important;
-        color: #04080F !important;
-    }
-    .stTabs [data-baseweb="tab-highlight"] { display: none !important; }
-    .stTabs [data-baseweb="tab-border"]    { display: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
-    # Logo
+    v64 = _video_base64("ev_intro.mp4")
+    if v64:
+        video_html = f'<video class="intro-video" autoplay muted loop playsinline><source src="data:video/mp4;base64,{v64}" type="video/mp4"></video>'
+    else:
+        video_html = '<div class="intro-video" style="background:radial-gradient(circle at center,rgba(0,229,184,.18),transparent 45%),linear-gradient(135deg,#020712,#071827);"></div>'
+
+    st.markdown(f"""
+    <div class="intro-shell">
+        {video_html}
+        <div class="intro-overlay"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("🚀 Enter App", key="intro_enter_app", use_container_width=True):
+        st.session_state.intro_done = True
+        st.session_state.auth_mode = "login"
+        st.rerun()
+
+
+def login_page():
+    _ensure_users_table()
+    st.markdown("""
+    <style>
+    .block-container {padding-top:2.2rem !important; max-width:560px !important;}
+    .auth-card{background:rgba(8,14,26,.88); border:1px solid rgba(0,229,184,.20); border-radius:24px; padding:22px 26px; box-shadow:0 18px 60px rgba(0,0,0,.45); backdrop-filter:blur(22px); margin-bottom:18px;}
+    .auth-title{text-align:center;font-family:'Syne',sans-serif;font-size:36px;font-weight:900;color:white;letter-spacing:-.04em;margin:8px 0 2px;}
+    .auth-title span{color:#00E5B8;}.auth-sub{text-align:center;color:#8BA0BA;font-size:14px;margin-bottom:18px;}
+    .switch-box{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0 22px;}
+    </style>
+    """, unsafe_allow_html=True)
+
     try:
         _lc1, _lc2, _lc3 = st.columns([1, 2, 1])
         with _lc2:
@@ -834,101 +860,57 @@ def login_page():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Tabs: Sign In / Register ──────────────────────────────────
-    tab_login, tab_register = st.tabs(["🔐  Log In", "✨  Register"])
+    sw1, sw2 = st.columns(2)
+    with sw1:
+        if st.button("🔐 Log In", key="switch_login", use_container_width=True, type="primary" if st.session_state.auth_mode=="login" else "secondary"):
+            st.session_state.auth_mode = "login"; st.rerun()
+    with sw2:
+        if st.button("✨ Register", key="switch_register", use_container_width=True, type="primary" if st.session_state.auth_mode=="register" else "secondary"):
+            st.session_state.auth_mode = "register"; st.rerun()
 
-    # ── SIGN IN TAB ───────────────────────────────────────────────
-    with tab_login:
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-        if "login_role" not in st.session_state:
-            st.session_state.login_role = "User"
-
-        st.markdown("""
-        <div style="color:#8BA0BA; font-size:12px; font-weight:600; text-transform:uppercase;
-            letter-spacing:0.10em; margin-bottom:10px;">Login As</div>
-        """, unsafe_allow_html=True)
-
-        rb1, rb2 = st.columns([1,1], gap="medium")
-        with rb1:
-            if st.button("👤  User", key="role_user_btn", use_container_width=True,
-                         type="primary" if st.session_state.login_role == "User" else "secondary"):
-                st.session_state.login_role = "User"
-                st.rerun()
-        with rb2:
-            if st.button("🛡  Admin", key="role_admin_btn", use_container_width=True,
-                         type="primary" if st.session_state.login_role == "Admin" else "secondary"):
-                st.session_state.login_role = "Admin"
-                st.rerun()
-
-        role = st.session_state.login_role
-        st.markdown(f"""
-        <div style="display:flex; align-items:center; gap:8px; margin:12px 0 4px;
-            padding:8px 14px; background:rgba(0,229,184,0.06);
-            border:1px solid rgba(0,229,184,0.15); border-radius:10px;">
-            <span style="font-size:16px;">{'👤' if role == 'User' else '🛡'}</span>
-            <span style="color:#8BA0BA; font-size:13px;">Signing in as
-                <b style="color:#00E5B8;">{role}</b>
-            </span>
-        </div>""", unsafe_allow_html=True)
+    if st.session_state.auth_mode == "login":
+        st.markdown('<div class="section-label">Login As</div>', unsafe_allow_html=True)
+        if "login_role" not in st.session_state: st.session_state.login_role = "User"
+        r1, r2 = st.columns(2)
+        with r1:
+            if st.button("👤 User", key="role_user_btn", use_container_width=True, type="primary" if st.session_state.login_role=="User" else "secondary"):
+                st.session_state.login_role="User"; st.rerun()
+        with r2:
+            if st.button("🛡 Admin", key="role_admin_btn", use_container_width=True, type="primary" if st.session_state.login_role=="Admin" else "secondary"):
+                st.session_state.login_role="Admin"; st.rerun()
 
         li_username = st.text_input("Username", placeholder="Enter username", key="li_username")
         li_password = st.text_input("Password", type="password", placeholder="Enter password", key="li_password")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            login_btn = st.button("Log In", use_container_width=True, key="login_btn")
-        with col2:
-            cancel_btn = st.button("Cancel", use_container_width=True, key="cancel_btn")
-
-        if cancel_btn:
-            st.warning("Login cancelled.")
-
+        c1, c2 = st.columns(2)
+        with c1:
+            login_btn = st.button("🚀 Log In", use_container_width=True, key="login_btn")
+        with c2:
+            back_btn = st.button("⬅ Intro", use_container_width=True, key="back_intro_btn")
+        if back_btn:
+            st.session_state.intro_done=False; st.rerun()
         if login_btn:
+            role = st.session_state.login_role
             if role == "Admin" and li_username == "admin" and li_password == "admin123":
-                st.session_state.logged_in = True
-                st.session_state.role = "Admin"
-                st.rerun()
-            elif role == "User":
-                # Check DB-registered users first
-                if _verify_user(li_username, li_password):
-                    st.session_state.logged_in = True
-                    st.session_state.role = "User"
-                    st.rerun()
-                # Legacy default user fallback
-                elif li_username == "user" and li_password == "user123":
-                    st.session_state.logged_in = True
-                    st.session_state.role = "User"
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid credentials. If you're new, please Register first.")
+                st.session_state.logged_in=True; st.session_state.role="Admin"; st.rerun()
+            elif role == "User" and (_verify_user(li_username, li_password) or (li_username == "user" and li_password == "user123")):
+                st.session_state.logged_in=True; st.session_state.role="User"; st.rerun()
             else:
-                st.error("❌ Invalid credentials. Please try again.")
-
-        st.markdown("""
-        <p style="text-align:center; color:#4B6080; font-size:12px; margin-top:16px;">
-            New here? Switch to the <b style="color:#00E5B8;">Register</b> tab to create an account.
-        </p>""", unsafe_allow_html=True)
-
-    # ── REGISTER TAB ─────────────────────────────────────────────
-    with tab_register:
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-        st.markdown("""
-        <div style="padding:12px 16px; background:rgba(0,229,184,0.06);
-            border:1px solid rgba(0,229,184,0.18); border-radius:12px; margin-bottom:16px;">
-            <div style="color:#00E5B8; font-size:13px; font-weight:700;">👋 First time here?</div>
-            <div style="color:#8BA0BA; font-size:13px; margin-top:4px;">
-                Create your account below. Already registered? Switch to Sign In.
-            </div>
-        </div>""", unsafe_allow_html=True)
-
-        reg_fullname = st.text_input("Full Name",        placeholder="Your full name",      key="reg_fullname")
-        reg_email    = st.text_input("Email Address",    placeholder="your@email.com",       key="reg_email")
-        reg_username = st.text_input("Choose Username",  placeholder="Pick a unique username", key="reg_username")
-        reg_pw1      = st.text_input("Password",         type="password", placeholder="Create a password",  key="reg_pw1")
-        reg_pw2      = st.text_input("Confirm Password", type="password", placeholder="Re-enter password",  key="reg_pw2")
-
-        if st.button("🚀  Create Account", use_container_width=True, key="register_btn"):
+                st.error("❌ Invalid credentials. New user? Please Register first.")
+    else:
+        st.info("👋 First time here? Create your account below.")
+        reg_fullname = st.text_input("Full Name", placeholder="Your full name", key="reg_fullname")
+        reg_email = st.text_input("Email Address", placeholder="your@email.com", key="reg_email")
+        reg_username = st.text_input("Choose Username", placeholder="Pick a unique username", key="reg_username")
+        reg_pw1 = st.text_input("Password", type="password", placeholder="Create a password", key="reg_pw1")
+        reg_pw2 = st.text_input("Confirm Password", type="password", placeholder="Re-enter password", key="reg_pw2")
+        c1, c2 = st.columns(2)
+        with c1:
+            reg_btn = st.button("🚀 Create Account", use_container_width=True, key="register_btn")
+        with c2:
+            back_btn = st.button("⬅ Intro", use_container_width=True, key="reg_back_intro_btn")
+        if back_btn:
+            st.session_state.intro_done=False; st.rerun()
+        if reg_btn:
             if not all([reg_fullname, reg_email, reg_username, reg_pw1, reg_pw2]):
                 st.warning("⚠️ Please fill in all fields.")
             elif reg_pw1 != reg_pw2:
@@ -938,15 +920,18 @@ def login_page():
             else:
                 ok, msg = _register_user(reg_username, reg_pw1, reg_fullname, reg_email)
                 if ok:
-                    st.success(f"✅ {msg}")
+                    st.success("✅ " + msg)
+                    st.session_state.auth_mode="login"
                 else:
-                    st.error(f"❌ {msg}")
+                    st.error("❌ " + msg)
 
-    st.markdown("""
-    <p style="text-align:center; color:#4B6080; font-size:12px; margin-top:20px;">
-        © 2026 Chargevo — Secure Access
-    </p>""", unsafe_allow_html=True)
- 
+    st.markdown('<p style="text-align:center;color:#4B6080;font-size:12px;margin-top:20px;">© 2026 Chargevo — Secure Access</p>', unsafe_allow_html=True)
+
+
+if not st.session_state.intro_done and not st.session_state.logged_in:
+    intro_page()
+    st.stop()
+
  
 if not st.session_state.logged_in:
     login_page()
@@ -1681,13 +1666,18 @@ if selected == "Admin Panel" and admin_page == "Create EV Bunk":
                     execute_sql("""
                         INSERT INTO ev_bunks
                         (bunk_name,owner_name,state,city,address,total_machines,fast_chargers,normal_chargers,damaged_machines,working_machines,contact)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        ON DUPLICATE KEY UPDATE
-                            owner_name=VALUES(owner_name), state=VALUES(state), city=VALUES(city),
-                            address=VALUES(address), total_machines=VALUES(total_machines),
-                            fast_chargers=VALUES(fast_chargers), normal_chargers=VALUES(normal_chargers),
-                            damaged_machines=VALUES(damaged_machines), working_machines=VALUES(working_machines),
-                            contact=VALUES(contact)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(bunk_name) DO UPDATE SET
+                            owner_name=excluded.owner_name,
+                            state=excluded.state,
+                            city=excluded.city,
+                            address=excluded.address,
+                            total_machines=excluded.total_machines,
+                            fast_chargers=excluded.fast_chargers,
+                            normal_chargers=excluded.normal_chargers,
+                            damaged_machines=excluded.damaged_machines,
+                            working_machines=excluded.working_machines,
+                            contact=excluded.contact
                     """, (bunk_name,owner_name,cb_state,cb_city,address,total_machines,fast_chargers,normal_chargers,0,total_machines,contact))
                     st.success("✅ EV Bunk saved successfully!")
                 except Exception as e:
@@ -1738,9 +1728,9 @@ if selected == "Admin Panel" and admin_page == "Manage Bunk":
  
             if st.button("🔄 Update Bunk Details", key="update_bunk_btn"):
                 execute_sql("""
-                    UPDATE ev_bunks SET owner_name=%s,state=%s,city=%s,address=%s,contact=%s,
-                    total_machines=%s,fast_chargers=%s,normal_chargers=%s,
-                    damaged_machines=%s,working_machines=%s WHERE bunk_name=%s
+                    UPDATE ev_bunks SET owner_name=?,state=?,city=?,address=?,contact=?,
+                    total_machines=?,fast_chargers=?,normal_chargers=?,
+                    damaged_machines=?,working_machines=? WHERE bunk_name=?
                 """, (owner_name,state,city,address,contact,total_machines,fast_chargers,normal_chargers,
                       damaged_machines,working_machines,selected_bunk))
                 st.success("✅ Bunk details updated successfully!")
@@ -1891,7 +1881,7 @@ if selected == "Book Slot":
                 else:
                     try:
                         existing_slot = read_sql_df(
-                            "SELECT * FROM slot_bookings WHERE bunk_name=%s AND slot_date=%s AND slot_time=%s",
+                            "SELECT * FROM slot_bookings WHERE bunk_name=? AND slot_date=? AND slot_time=?",
                             (bs_bunk, bs_slot_date, bs_slot_time)
                         )
                         if not existing_slot.empty:
@@ -1901,7 +1891,7 @@ if selected == "Book Slot":
                                 INSERT INTO slot_bookings
                                 (bunk_name,customer_name,phone,vehicle_type,slot_date,slot_time,
                                  charging_type,estimated_price,advance_amount,payment_method,payment_status)
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                             """, (bs_bunk, bs_customer_name, bs_customer_phone, bs_vehicle_type,
                                   bs_slot_date, bs_slot_time, bs_charging_type,
                                   bs_est_price, bs_adv_amount, bs_payment_method,
@@ -1934,7 +1924,7 @@ if selected == "Book Slot":
                 else:
                     if bs_customer_name:
                         slot_data = read_sql_df(
-                            "SELECT * FROM slot_bookings WHERE customer_name=%s ORDER BY id DESC",
+                            "SELECT * FROM slot_bookings WHERE customer_name=? ORDER BY id DESC",
                             (bs_customer_name,)
                         )
                     else:
