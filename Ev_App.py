@@ -678,6 +678,60 @@ nav[style] { font-family: var(--font-b) !important; }
     padding: 6px;
     margin-bottom: 1.5rem;
 }
+
+/* ── Extra premium organization fixes ── */
+.brand-card{
+    display:flex; align-items:center; gap:18px;
+    background:linear-gradient(135deg,rgba(8,14,26,.92),rgba(0,229,184,.06));
+    border:1px solid rgba(0,229,184,.22);
+    border-radius:24px;
+    padding:18px 22px;
+    margin:0 auto 22px auto;
+    box-shadow:0 18px 55px rgba(0,0,0,.42);
+}
+.brand-logo{width:92px;height:92px;border-radius:18px;object-fit:cover;box-shadow:0 8px 28px rgba(0,0,0,.35);}
+.brand-title{font-family:var(--font-h);font-size:42px;font-weight:900;color:white;line-height:1;margin:0;}
+.brand-title span{color:var(--teal);}
+.brand-sub{color:var(--muted);font-size:14px;margin-top:8px;}
+.demo-admin-box{
+    background:rgba(0,229,184,.07);
+    border:1px solid rgba(0,229,184,.24);
+    border-radius:14px;
+    padding:12px 14px;
+    margin:12px 0 16px;
+    color:#B8C7D9;
+    font-size:13px;
+}
+.hero-actions-wrap{
+    max-width:620px;
+    margin:-7rem auto 3rem auto;
+    position:relative;
+    z-index:5;
+}
+.hero-actions-wrap .stButton>button{
+    height:56px!important;
+    border-radius:16px!important;
+    font-size:16px!important;
+    font-weight:900!important;
+}
+.header-panel{
+    background:rgba(8,14,26,.72);
+    border:1px solid rgba(0,229,184,.12);
+    border-radius:24px;
+    padding:16px 20px;
+    margin-bottom:24px;
+    box-shadow:0 14px 50px rgba(0,0,0,.28);
+    backdrop-filter:blur(18px);
+}
+@media (max-width: 768px){
+    .block-container{padding:1rem!important;}
+    .brand-title{font-size:32px;}
+    .brand-logo{width:74px;height:74px;}
+    .hero-title{font-size:42px;}
+    .hero-wrap{padding:70px 22px 120px;}
+    .hero-actions-wrap{margin:-6rem auto 2rem auto;}
+}
+
 </style>
 """, unsafe_allow_html=True)
  
@@ -709,6 +763,7 @@ except Exception as e:
 if "logged_in"        not in st.session_state: st.session_state.logged_in = False
 if "role"             not in st.session_state: st.session_state.role      = None
 if "payment_status"   not in st.session_state: st.session_state.payment_status = "Pending"
+if "page"             not in st.session_state: st.session_state.page = "Home"
  
  
 # ─────────────────────────────────────────
@@ -779,6 +834,14 @@ def _video_base64(path):
         return None
 
 
+def _image_base64(path):
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
+
+
 def intro_page():
     """Full-screen splash video. Clicking Enter App opens the auth page."""
     st.markdown("""
@@ -835,30 +898,29 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
 
-    try:
-        _lc1, _lc2, _lc3 = st.columns([1, 2, 1])
-        with _lc2:
-            st.image("logo_EV.jpeg", use_container_width=True)
-    except Exception:
+    logo_b64 = _image_base64("logo_EV.jpeg")
+    if logo_b64:
+        st.markdown(f"""
+        <div class="brand-card">
+            <img src="data:image/jpeg;base64,{logo_b64}" class="brand-logo">
+            <div>
+                <div class="brand-title">Charge<span>vo</span></div>
+                <div class="brand-sub">EV Charging Intelligence Platform</div>
+                <div class="brand-sub" style="font-size:12px;color:#6F86A6;margin-top:4px;">Secure Access Portal</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
         st.markdown("""
-        <div style="text-align:center; margin-bottom:8px;">
-            <div style="display:inline-flex; align-items:center; justify-content:center;
-                width:80px; height:80px; border-radius:22px;
-                background:linear-gradient(135deg,#00E5B8,#38C8F8);
-                font-size:38px; box-shadow:0 8px 30px rgba(0,229,184,0.35);">⚡</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div style="text-align:center; margin-bottom:24px; margin-top:12px;">
-        <h1 style="font-family:'Syne',sans-serif; font-size:38px; font-weight:800;
-            color:white; letter-spacing:-0.03em; margin-bottom:6px;">
-            Charge<span style="color:#00E5B8;">vo</span>
-        </h1>
-        <p style="color:#8BA0BA; font-size:15px; margin:0;">
-            EV Charging Intelligence Platform
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        <div class="brand-card">
+            <div style="width:92px;height:92px;border-radius:18px;background:linear-gradient(135deg,#00E5B8,#38C8F8);display:flex;align-items:center;justify-content:center;font-size:42px;">⚡</div>
+            <div>
+                <div class="brand-title">Charge<span>vo</span></div>
+                <div class="brand-sub">EV Charging Intelligence Platform</div>
+                <div class="brand-sub" style="font-size:12px;color:#6F86A6;margin-top:4px;">Secure Access Portal</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     sw1, sw2 = st.columns(2)
     with sw1:
@@ -878,6 +940,14 @@ def login_page():
         with r2:
             if st.button("🛡 Admin", key="role_admin_btn", use_container_width=True, type="primary" if st.session_state.login_role=="Admin" else "secondary"):
                 st.session_state.login_role="Admin"; st.rerun()
+
+        if st.session_state.login_role == "Admin":
+            st.markdown("""
+            <div class="demo-admin-box">
+                <b style="color:#00E5B8;">🔐 Demo Admin Login</b><br>
+                Username: <b>admin</b> &nbsp; | &nbsp; Password: <b>admin123</b>
+            </div>
+            """, unsafe_allow_html=True)
 
         li_username = st.text_input("Username", placeholder="Enter username", key="li_username")
         li_password = st.text_input("Password", type="password", placeholder="Enter password", key="li_password")
@@ -941,7 +1011,7 @@ if st.session_state.role == "Admin":
     try:
         init_database()
     except Exception as e:
-        st.warning("MySQL connection failed. Admin SQL features may not work.")
+        st.warning("Database initialization failed. Admin features may not work.")
  
  
 # ─────────────────────────────────────────
@@ -982,68 +1052,104 @@ st.markdown("<div style='margin-bottom:0.5rem'></div>", unsafe_allow_html=True)
  
  
 # ─────────────────────────────────────────
-# NAVIGATION
+# NAVIGATION  — one-click reliable native buttons
 # ─────────────────────────────────────────
-NAV_STYLE = {
-    "container": {
-        "padding": "8px 12px",
-        "background": "rgba(8,14,26,0.88)",
-        "border-radius": "18px",
-        "border": "1px solid rgba(0,229,184,0.12)",
-        "box-shadow": "0 4px 30px rgba(0,0,0,0.40)",
-        "backdrop-filter": "blur(20px)",
-    },
-    "icon": {"color": "#00E5B8", "font-size": "17px"},
-    "nav-link": {
-        "font-size": "14px", "font-weight": "600",
-        "text-align": "center", "padding": "11px 16px",
-        "margin": "0 3px", "border-radius": "12px",
-        "color": "#8BA0BA", "font-family": "'DM Sans',sans-serif",
-        "--hover-color": "rgba(0,229,184,0.08)",
-        "transition": "all 0.2s",
-    },
-    "nav-link-selected": {
-        "background": "linear-gradient(135deg,#00E5B8,#38C8F8)",
-        "color": "#04080F",
-        "font-weight": "700",
-        "box-shadow": "0 4px 20px rgba(0,229,184,0.30)",
-    },
+NAV_ITEMS_ADMIN = [
+    ("Home", "🏠"), ("Prediction", "⚡"), ("Analytics", "📊"), ("Model", "🤖"),
+    ("Admin Panel", "⚙️"), ("Book Slot", "📅"), ("About Us", "ℹ️"), ("Contact Us", "📞")
+]
+NAV_ITEMS_USER = [
+    ("Home", "🏠"), ("Prediction", "⚡"), ("Book Slot", "📅"),
+    ("About Us", "ℹ️"), ("Contact Us", "📞")
+]
+
+nav_items = NAV_ITEMS_ADMIN if st.session_state.role == "Admin" else NAV_ITEMS_USER
+nav_options = [item[0] for item in nav_items]
+
+if "page" not in st.session_state:
+    st.session_state.page = "Home"
+if "admin_page" not in st.session_state:
+    st.session_state.admin_page = "Create EV Bunk"
+if st.session_state.page not in nav_options:
+    st.session_state.page = "Home"
+
+st.markdown("""
+<style>
+.nav-shell{
+    background:rgba(8,14,26,0.88);
+    border:1px solid rgba(0,229,184,0.14);
+    border-radius:20px;
+    padding:10px 14px;
+    box-shadow:0 4px 30px rgba(0,0,0,0.40);
+    backdrop-filter:blur(20px);
+    margin: 0.5rem 0 1.5rem;
 }
- 
-if st.session_state.role == "Admin":
-    selected = option_menu(
-        menu_title=None,
-        options=["Home", "Prediction", "Analytics", "Model", "Admin Panel", "Book Slot", "About Us", "Contact Us"],
-        icons=["house-fill","lightning-fill","bar-chart-fill","cpu-fill","gear-fill","calendar-check-fill","info-circle-fill","telephone-fill"],
-        default_index=0,
-        orientation="horizontal",
-        styles=NAV_STYLE
-    )
-else:
-    selected = option_menu(
-        menu_title=None,
-        options=["Home", "Prediction", "Book Slot", "About Us", "Contact Us"],
-        icons=["house-fill","lightning-fill","calendar-check-fill","info-circle-fill","telephone-fill"],
-        default_index=0,
-        orientation="horizontal",
-        styles=NAV_STYLE
-    )
- 
+.nav-shell div[data-testid="column"]{padding:0 4px !important;}
+.nav-shell .stButton>button{
+    height:48px !important;
+    border-radius:14px !important;
+    font-size:14px !important;
+    font-weight:800 !important;
+    box-shadow:none !important;
+}
+.nav-shell .stButton>button[kind="secondary"]{
+    background:rgba(0,229,184,0.04) !important;
+    border:1px solid transparent !important;
+    color:#8BA0BA !important;
+}
+.nav-shell .stButton>button[kind="secondary"]:hover{
+    background:rgba(0,229,184,0.11) !important;
+    border-color:rgba(0,229,184,0.26) !important;
+    color:#E8EEF6 !important;
+}
+.admin-subnav-wrap{
+    background:rgba(12,20,36,0.85);
+    border:1px solid rgba(249,115,22,0.18);
+    border-radius:16px;
+    padding:8px 10px;
+    margin: 0 0 1.5rem;
+}
+.admin-subnav-wrap .stButton>button[kind="primary"]{
+    background:linear-gradient(135deg,#F97316,#FB7185) !important;
+    color:white !important;
+}
+.admin-subnav-wrap .stButton>button[kind="secondary"]{
+    background:rgba(249,115,22,0.05) !important;
+    border:1px solid rgba(249,115,22,0.18) !important;
+    color:#8BA0BA !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+nav_cols = st.columns(len(nav_items))
+for col, (page_name, page_icon) in zip(nav_cols, nav_items):
+    with col:
+        btn_type = "primary" if st.session_state.page == page_name else "secondary"
+        if st.button(f"{page_icon}  {page_name}", key=f"nav_{page_name}", use_container_width=True, type=btn_type):
+            st.session_state.page = page_name
+            st.rerun()
+
+
+selected = st.session_state.page
+
 admin_page = None
 if selected == "Admin Panel" and st.session_state.role == "Admin":
-    admin_page = option_menu(
-        menu_title=None,
-        options=["Create EV Bunk", "Manage Bunk"],
-        icons=["plus-circle-fill","building-fill","calendar-check-fill"],
-        orientation="horizontal",
-        styles={
-            "container": {"padding":"6px 10px","background":"rgba(12,20,36,0.85)","border-radius":"14px","border":"1px solid rgba(249,115,22,0.18)"},
-            "icon": {"color":"#F97316","font-size":"15px"},
-            "nav-link": {"font-size":"14px","font-weight":"600","color":"#8BA0BA","padding":"10px 14px","border-radius":"10px","--hover-color":"rgba(249,115,22,0.08)"},
-            "nav-link-selected": {"background":"linear-gradient(135deg,#F97316,#FB7185)","color":"white","font-weight":"700"},
-        }
-    )
- 
+    st.markdown('<div class="admin-subnav-wrap">', unsafe_allow_html=True)
+    a1, a2 = st.columns(2)
+    with a1:
+        if st.button("➕ Create EV Bunk", key="admin_create_nav", use_container_width=True,
+                     type="primary" if st.session_state.admin_page == "Create EV Bunk" else "secondary"):
+            st.session_state.admin_page = "Create EV Bunk"
+            st.rerun()
+    with a2:
+        if st.button("🏢 Manage Bunk", key="admin_manage_nav", use_container_width=True,
+                     type="primary" if st.session_state.admin_page == "Manage Bunk" else "secondary"):
+            st.session_state.admin_page = "Manage Bunk"
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    admin_page = st.session_state.admin_page
+
  
 # ═══════════════════════════════════════════
 #  HOME
@@ -1065,26 +1171,36 @@ if selected == "Home":
                 Smart EV Charging<br><span>Demand Intelligence</span>
             </div>
             <div class="hero-sub" style="text-align:center;">
-                Predict charging demand, monitor station health, and plan
-                EV infrastructure with real-time AI insights.
-            </div>
-            <div style="display:flex; gap:14px; margin-top:32px; justify-content:center; flex-wrap:wrap;">
-                <div style="padding:12px 28px; background:linear-gradient(135deg,#00E5B8,#38C8F8);
-                    border-radius:12px; color:#04080F; font-family:'Syne',sans-serif;
-                    font-weight:700; font-size:14px; letter-spacing:0.04em;">
-                    ⚡ Explore Predictions
-                </div>
-                <div style="padding:12px 28px; background:rgba(0,229,184,0.08);
-                    border:1px solid rgba(0,229,184,0.30); border-radius:12px;
-                    color:#00E5B8; font-family:'Syne',sans-serif;
-                    font-weight:700; font-size:14px; letter-spacing:0.04em;">
-                    📊 View Analytics
-                </div>
+                Predict charging demand, monitor station health, book EV charging slots,
+                and plan infrastructure with real-time AI insights.
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
- 
+
+    st.markdown('<div class="hero-actions-wrap">', unsafe_allow_html=True)
+    if st.session_state.role == "Admin":
+        h_btn1, h_btn2 = st.columns(2)
+        with h_btn1:
+            if st.button("⚡ Demand Forecasting", key="hero_prediction_admin", use_container_width=True):
+                st.session_state.page = "Prediction"
+                st.rerun()
+        with h_btn2:
+            if st.button("📊 Analytics Dashboard", key="hero_analytics_admin", use_container_width=True):
+                st.session_state.page = "Analytics"
+                st.rerun()
+    else:
+        h_btn1, h_btn2 = st.columns(2)
+        with h_btn1:
+            if st.button("⚡ Demand Forecasting", key="hero_prediction_user", use_container_width=True):
+                st.session_state.page = "Prediction"
+                st.rerun()
+        with h_btn2:
+            if st.button("📅 Book Charging Slot", key="hero_booking_user", use_container_width=True):
+                st.session_state.page = "Book Slot"
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # ── Ticker
     st.markdown("""
     <div class="ticker-wrap">
