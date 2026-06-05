@@ -205,6 +205,32 @@ textarea:focus {
     box-shadow: 0 0 0 3px rgba(0,229,184,0.12) !important;
 }
 [data-baseweb="select"] svg { color: var(--teal) !important; }
+
+/* ── Placeholder text — visible in both light & dark mode ── */
+[data-testid="stTextInput"] input::placeholder,
+[data-testid="stNumberInput"] input::placeholder,
+[data-testid="stDateInput"] input::placeholder,
+[data-baseweb="input"] input::placeholder,
+textarea::placeholder {
+    color: #8BA0BA !important;
+    opacity: 1 !important;
+}
+/* WebKit browsers */
+[data-testid="stTextInput"] input::-webkit-input-placeholder,
+[data-testid="stNumberInput"] input::-webkit-input-placeholder,
+[data-baseweb="input"] input::-webkit-input-placeholder,
+textarea::-webkit-input-placeholder {
+    color: #8BA0BA !important;
+    opacity: 1 !important;
+}
+/* Firefox */
+[data-testid="stTextInput"] input::-moz-placeholder,
+[data-testid="stNumberInput"] input::-moz-placeholder,
+[data-baseweb="input"] input::-moz-placeholder,
+textarea::-moz-placeholder {
+    color: #8BA0BA !important;
+    opacity: 1 !important;
+}
  
 /* ── Buttons ── */
 .stButton > button,
@@ -1102,22 +1128,7 @@ st.markdown("""
     border-color:rgba(0,229,184,0.26) !important;
     color:#E8EEF6 !important;
 }
-.admin-subnav-wrap{
-    background:rgba(12,20,36,0.85);
-    border:1px solid rgba(249,115,22,0.18);
-    border-radius:16px;
-    padding:8px 10px;
-    margin: 0 0 1.5rem;
-}
-.admin-subnav-wrap .stButton>button[kind="primary"]{
-    background:linear-gradient(135deg,#F97316,#FB7185) !important;
-    color:white !important;
-}
-.admin-subnav-wrap .stButton>button[kind="secondary"]{
-    background:rgba(249,115,22,0.05) !important;
-    border:1px solid rgba(249,115,22,0.18) !important;
-    color:#8BA0BA !important;
-}
+/* admin-subnav-wrap removed — styles now applied inline via admin-subnav-row */
 </style>
 """, unsafe_allow_html=True)
 
@@ -1135,7 +1146,37 @@ selected = st.session_state.page
 
 admin_page = None
 if selected == "Admin Panel" and st.session_state.role == "Admin":
-    st.markdown('<div class="admin-subnav-wrap">', unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    div[data-testid="stHorizontalBlock"]:has(button[kind="primary"][data-testid="baseButton-primary"]) + div { display: none !important; }
+    .admin-subnav-row { margin: 0 0 1.2rem; }
+    .admin-subnav-row .stButton>button[kind="primary"]{
+        background:linear-gradient(135deg,#00E5B8,#38C8F8) !important;
+        color:#04080F !important;
+        border-radius:14px !important;
+        height:48px !important;
+        font-weight:800 !important;
+        font-size:14px !important;
+        box-shadow:0 4px 18px rgba(0,229,184,0.28) !important;
+        border:none !important;
+    }
+    .admin-subnav-row .stButton>button[kind="secondary"]{
+        background:rgba(0,229,184,0.05) !important;
+        border:1px solid rgba(0,229,184,0.20) !important;
+        color:#8BA0BA !important;
+        border-radius:14px !important;
+        height:48px !important;
+        font-weight:700 !important;
+        font-size:14px !important;
+        box-shadow:none !important;
+    }
+    .admin-subnav-row .stButton>button[kind="secondary"]:hover{
+        background:rgba(0,229,184,0.11) !important;
+        color:#E8EEF6 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="admin-subnav-row">', unsafe_allow_html=True)
     a1, a2 = st.columns(2)
     with a1:
         if st.button("➕ Create EV Bunk", key="admin_create_nav", use_container_width=True,
@@ -2176,7 +2217,7 @@ if selected == "Contact Us":
                 <div class="contact-icon">📧</div>
                 <div>
                     <div class="contact-label">Email</div>
-                    <div class="contact-val">soumili@example.com</div>
+                    <div class="contact-val">chargevo@example.com</div>
                 </div>
             </div>
             <div class="contact-item">
