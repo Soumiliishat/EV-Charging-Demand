@@ -2129,9 +2129,9 @@ if selected == "About Us":
     t1,t2,t3,t4 = st.columns(4)
     team = [
         ("S","Soumili Ishat","Developer & ML Engineer","Streamlit app, ML model integration, MySQL, dashboard design & UI."),
-        ("P","Paromita","Data Analysis","Dataset analysis, EV demand insights, data preprocessing & documentation."),
-        ("R","Rakhi","Research & Testing","Project research, feature testing, validation & presentation support."),
-        ("T","Tabasum","Documentation","Report writing, workflow explanation & project summary."),
+        ("P","Paromita Haldar","Data Analysis","Dataset analysis, EV demand insights, data preprocessing & documentation."),
+        ("R","Rakhi Ghosh","Research & Testing","Project research, feature testing, validation & presentation support."),
+        ("T","Tabasum Parvin","Documentation","Report writing, workflow explanation & project summary."),
     ]
     for col, (initial, name, role, desc) in zip([t1,t2,t3,t4], team):
         with col:
