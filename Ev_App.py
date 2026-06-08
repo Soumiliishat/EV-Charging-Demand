@@ -2374,7 +2374,7 @@ if selected == "Contact Us":
                 <div class="contact-icon">📧</div>
                 <div>
                     <div class="contact-label">Email</div>
-                    <div class="contact-val">soumili@example.com</div>
+                    <div class="contact-val">Chargevo@example.com</div>
                 </div>
             </div>
             <div class="contact-item">
