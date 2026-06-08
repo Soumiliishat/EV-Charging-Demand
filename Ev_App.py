@@ -758,6 +758,163 @@ nav[style] { font-family: var(--font-b) !important; }
     .hero-actions-wrap{margin:-6rem auto 2rem auto;}
 }
 
+
+
+/* ============================================================
+   FINAL FIX: KEEP APP DARK EVEN WHEN SYSTEM / STREAMLIT IS LIGHT
+   This block must stay at the very END of the main CSS.
+   ============================================================ */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], .stApp {
+    color-scheme: dark !important;
+    background-color: #04080F !important;
+    color: #E8EEF6 !important;
+}
+
+[data-testid="stAppViewContainer"] {
+    background-image:
+        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(0,229,184,0.09) 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 80% 110%, rgba(56,200,248,0.07) 0%, transparent 55%),
+        linear-gradient(170deg, rgba(4,8,15,0.97) 0%, rgba(6,12,24,0.95) 100%),
+        url("https://images.unsplash.com/photo-1593941707882-a5bba14938c7?w=1920&q=80") !important;
+    background-size: cover !important;
+    background-attachment: fixed !important;
+    background-position: center !important;
+}
+
+/* Text fixed for light mode */
+h1, h2, h3, h4, h5, h6, label,
+[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] p,
+p, span, div, li {
+    color: #E8EEF6 !important;
+    -webkit-text-fill-color: inherit !important;
+}
+
+/* Input boxes fixed dark */
+[data-baseweb="select"] > div,
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stDateInput"] input,
+[data-testid="stTimeInput"] input,
+[data-baseweb="input"] input,
+textarea,
+input {
+    background: #0C1424 !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    border: 1px solid rgba(232,238,246,0.75) !important;
+    border-radius: 13px !important;
+    caret-color: #00E5B8 !important;
+    box-shadow: none !important;
+}
+
+/* Placeholder visible but dark-theme matching */
+input::placeholder, textarea::placeholder,
+[data-testid="stTextInput"] input::placeholder,
+[data-testid="stNumberInput"] input::placeholder,
+[data-baseweb="input"] input::placeholder {
+    color: #8BA0BA !important;
+    -webkit-text-fill-color: #8BA0BA !important;
+    opacity: 1 !important;
+}
+
+/* Selected dropdown value fixed */
+[data-baseweb="select"] span,
+[data-baseweb="select"] div,
+[data-baseweb="select"] svg {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    fill: #00E5B8 !important;
+}
+
+/* Remove tiny cursor/rectangle after selected dropdown text */
+[data-baseweb="select"] input {
+    opacity: 0 !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    caret-color: transparent !important;
+    width: 0px !important;
+    min-width: 0px !important;
+}
+
+/* Dropdown menu must stay dark, not white, in system light mode */
+body div[data-baseweb="popover"],
+body div[data-baseweb="popover"] > div,
+body div[data-baseweb="menu"],
+body ul[role="listbox"],
+body [role="listbox"] {
+    background: #07111F !important;
+    color: #E8EEF6 !important;
+    -webkit-text-fill-color: #E8EEF6 !important;
+    border: 1px solid rgba(0,229,184,0.32) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.65) !important;
+}
+
+body div[data-baseweb="popover"] *,
+body div[data-baseweb="menu"] *,
+body ul[role="listbox"] *,
+body [role="listbox"] *,
+body li[role="option"],
+body div[role="option"] {
+    background: #07111F !important;
+    color: #E8EEF6 !important;
+    -webkit-text-fill-color: #E8EEF6 !important;
+    opacity: 1 !important;
+    font-weight: 700 !important;
+    text-shadow: none !important;
+}
+
+body li[role="option"],
+body div[role="option"] {
+    padding: 10px 14px !important;
+    min-height: 42px !important;
+}
+
+body li[role="option"]:hover,
+body div[role="option"]:hover,
+body [role="option"]:hover,
+body li[aria-selected="true"],
+body div[aria-selected="true"] {
+    background: rgba(0,229,184,0.18) !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
+
+/* Number input + - buttons fixed */
+[data-testid="stNumberInput"] button {
+    background: #E8EEF6 !important;
+    color: #04080F !important;
+    -webkit-text-fill-color: #04080F !important;
+    border: 1px solid #CBD5E1 !important;
+    font-weight: 900 !important;
+}
+
+/* Buttons fixed */
+.stButton > button,
+.stFormSubmitButton > button,
+.stDownloadButton > button {
+    background: linear-gradient(135deg,#00E5B8,#38C8F8) !important;
+    color: #031018 !important;
+    -webkit-text-fill-color: #031018 !important;
+    border: 1px solid rgba(0,229,184,.55) !important;
+    font-weight: 900 !important;
+    opacity: 1 !important;
+}
+
+.stButton > button[kind="secondary"] {
+    background: rgba(7,17,31,.88) !important;
+    color: #DCEAF7 !important;
+    -webkit-text-fill-color: #DCEAF7 !important;
+    border: 1px solid rgba(0,229,184,.32) !important;
+}
+
+/* Cards fixed */
+.g-card, .auth-card, .brand-card, .contact-card, .about-card,
+.stat-card, .footer-wrap, .pred-result-wrap, .nav-shell {
+    background: linear-gradient(135deg, rgba(7,17,31,.94), rgba(10,25,44,.90)) !important;
+    border: 1px solid rgba(0,229,184,.26) !important;
+    box-shadow: 0 18px 60px rgba(0,0,0,.38) !important;
+}
 </style>
 """, unsafe_allow_html=True)
  
@@ -2217,7 +2374,7 @@ if selected == "Contact Us":
                 <div class="contact-icon">📧</div>
                 <div>
                     <div class="contact-label">Email</div>
-                    <div class="contact-val">chargevo@example.com</div>
+                    <div class="contact-val">soumili@example.com</div>
                 </div>
             </div>
             <div class="contact-item">
