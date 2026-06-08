@@ -1854,13 +1854,18 @@ if st.session_state.role == "Admin" and selected == "Analytics":
     def styled_fig(fig):
         fig.update_layout(
             paper_bgcolor="rgba(8,14,26,0.80)",
-            plot_bgcolor ="rgba(8,14,26,0.80)",
-            font=dict(color="#8BA0BA", family="DM Sans"),
-            title_font=dict(color="white", family="Syne", size=18),
-            margin=dict(l=20,r=20,t=50,b=20),
+            plot_bgcolor="rgba(8,14,26,0.80)",
+            font=dict(color="#FFFFFF", family="DM Sans", size=14),
+            title_font=dict(color="#FFFFFF", family="Syne", size=18),
+            legend=dict(
+                font=dict(color="#FFFFFF", size=14),
+                title_font=dict(color="#FFFFFF", size=14),
+                bgcolor="rgba(0,0,0,0)"
+            ),
+            margin=dict(l=20, r=20, t=50, b=20),
         )
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#8BA0BA"))
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#8BA0BA"))
+        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
+        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
         return fig
  
     state_demand = df.groupby("state")["power_consumed"].sum().sort_values(ascending=False).head(10).reset_index()
@@ -1879,7 +1884,8 @@ if st.session_state.role == "Admin" and selected == "Analytics":
     with c_left:
         fig3 = px.pie(df, names="charging_type", title="Charging Type Distribution",
                       color_discrete_sequence=["#00E5B8","#38C8F8","#F97316","#8B5CF6"])
-        fig3.update_traces(textfont_color="white")
+        fig3.update_traces(textfont=dict(color="#FFFFFF", size=14))
+        fig3.update_layout(legend=dict(font=dict(color="#FFFFFF", size=14), title_font=dict(color="#FFFFFF", size=14)))
         st.plotly_chart(styled_fig(fig3), use_container_width=True)
     with c_right:
         fig4 = px.histogram(df, x="power_consumed", nbins=30,
@@ -1905,13 +1911,19 @@ if st.session_state.role == "Admin" and selected == "Model":
  
     def styled_fig(fig):
         fig.update_layout(
-            paper_bgcolor="rgba(8,14,26,0.80)", plot_bgcolor="rgba(8,14,26,0.80)",
-            font=dict(color="#8BA0BA", family="DM Sans"),
-            title_font=dict(color="white", family="Syne", size=18),
-            margin=dict(l=20,r=20,t=50,b=20)
+            paper_bgcolor="rgba(8,14,26,0.80)",
+            plot_bgcolor="rgba(8,14,26,0.80)",
+            font=dict(color="#FFFFFF", family="DM Sans", size=14),
+            title_font=dict(color="#FFFFFF", family="Syne", size=18),
+            legend=dict(
+                font=dict(color="#FFFFFF", size=14),
+                title_font=dict(color="#FFFFFF", size=14),
+                bgcolor="rgba(0,0,0,0)"
+            ),
+            margin=dict(l=20, r=20, t=50, b=20)
         )
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)")
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)")
+        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
+        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
         return fig
  
     st.markdown('<div class="section-label">Model Comparison</div>', unsafe_allow_html=True)
@@ -2374,7 +2386,7 @@ if selected == "Contact Us":
                 <div class="contact-icon">📧</div>
                 <div>
                     <div class="contact-label">Email</div>
-                    <div class="contact-val">Chargevo@example.com</div>
+                    <div class="contact-val">soumili@example.com</div>
                 </div>
             </div>
             <div class="contact-item">
@@ -2412,7 +2424,6 @@ if selected == "Contact Us":
             else:
                 st.warning("Please fill in name, email, and message.")
         st.markdown('</div>', unsafe_allow_html=True)
- 
  
 # ═══════════════════════════════════════════
 #  FOOTER  — pure HTML (no columns glitch)
