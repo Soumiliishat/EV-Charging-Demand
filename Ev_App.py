@@ -947,6 +947,180 @@ if "logged_in"        not in st.session_state: st.session_state.logged_in = Fals
 if "role"             not in st.session_state: st.session_state.role      = None
 if "payment_status"   not in st.session_state: st.session_state.payment_status = "Pending"
 if "page"             not in st.session_state: st.session_state.page = "Home"
+
+
+# ─────────────────────────────────────────
+# FLOATING PROJECT CHATBOT
+# ─────────────────────────────────────────
+def get_chargevo_bot_answer(user_question, role="User"):
+    """Simple rule-based chatbot for Chargevo project guidance."""
+    q = (user_question or "").lower().strip()
+
+    if not q:
+        return "Please type your question. I can help with prediction, booking, payment, admin panel, analytics, and EV bunk management."
+
+    greetings = ["hi", "hello", "hey", "good morning", "good evening"]
+    if any(word in q for word in greetings):
+        return f"Hello! I am Chargevo Assistant. You are logged in as {role}. Ask me about demand prediction, slot booking, payment, EV bunks, analytics, or how to use this project."
+
+    if any(word in q for word in ["what is", "about project", "chargevo", "project", "purpose"]):
+        return "Chargevo is an EV Charging Demand Prediction System. It helps users predict charging demand, find EV charging stations, book charging slots, estimate price, and helps admins manage EV bunk details and monitor analytics."
+
+    if any(word in q for word in ["predict", "prediction", "forecast", "demand"]):
+        return "Go to the Prediction page. Select State, City, Vehicle Type, Power, Total Machines, Damaged Machines, and electrical values. Then click the prediction button to get the estimated EV charging demand."
+
+    if any(word in q for word in ["book", "slot", "booking", "reserve"]):
+        return "Go to the Book Slot page. Select your State, City, EV Bunk, Date, Time, Vehicle Type, and Charging Type. Then complete the payment step to reserve your charging slot. If a slot is already booked, choose another time."
+
+    if any(word in q for word in ["payment", "pay", "advance", "qr", "card", "paid"]):
+        return "In the booking page, Chargevo shows total estimated price, advance amount, and remaining amount. You can choose QR payment or card payment. After payment, the booking status should show as Paid/Booked."
+
+    if any(word in q for word in ["admin", "owner", "manage", "bunk", "station", "machine", "charger"]):
+        if role == "Admin":
+            return "As Admin, open Admin Panel. You can create a new EV bunk, update total machines, damaged machines, working machines, fast chargers, normal chargers, owner details, and contact information."
+        return "Admin features are only available for the Admin profile. As a User, you can use Prediction, Book Slot, About Us, and Contact Us pages."
+
+    if any(word in q for word in ["analytics", "dashboard", "chart", "graph", "report"]):
+        if role == "Admin":
+            return "Open the Analytics page to view charts, demand insights, state/city analysis, station performance, and project dashboard details."
+        return "Analytics is available only for Admin. Users can view Prediction and Book Slot features."
+
+    if any(word in q for word in ["model", "machine learning", "ml", "algorithm", "random forest"]):
+        return "This project uses a machine learning model to predict EV charging demand from station, vehicle, location, charger, and electrical features. The model output helps plan charging resources better."
+
+    if any(word in q for word in ["login", "register", "password", "profile", "user"]):
+        return "New users can register first, then log in using username and password. Admin can log in using admin credentials. User and Admin profiles have different menu options."
+
+    if any(word in q for word in ["contact", "help", "support"]):
+        return "You can open the Contact Us page for project contact details. For using the app, ask me about prediction, booking, payment, admin panel, or analytics."
+
+    if any(word in q for word in ["how to use", "steps", "guide", "work"]):
+        if role == "Admin":
+            return "Admin guide: 1) Check Home dashboard, 2) Use Prediction for demand forecast, 3) Use Analytics for insights, 4) Use Admin Panel to create/manage EV bunks, 5) Check Book Slot for reservations."
+        return "User guide: 1) Open Prediction to check demand, 2) Open Book Slot to reserve charging, 3) Complete payment, 4) Use About Us and Contact Us for project details."
+
+    return "I can help with Chargevo project questions like: how to predict demand, book a slot, make payment, manage EV bunks, use admin panel, view analytics, or understand the ML model. Please ask in simple words."
+
+
+def render_floating_chatbot():
+    """Floating chatbot button and chat panel for both Admin and User profiles."""
+    if "chatbot_open" not in st.session_state:
+        st.session_state.chatbot_open = False
+    if "chatbot_messages" not in st.session_state:
+        st.session_state.chatbot_messages = [
+            {"role": "assistant", "text": "Hi! I am Chargevo Assistant. Ask me anything about this EV Charging project."}
+        ]
+
+    st.markdown("""
+    <style>
+    .st-key-chatbot_toggle {
+        position: fixed !important;
+        right: 28px !important;
+        bottom: 28px !important;
+        z-index: 999999 !important;
+        width: 66px !important;
+    }
+    .st-key-chatbot_toggle button {
+        width: 66px !important;
+        height: 66px !important;
+        border-radius: 50% !important;
+        font-size: 28px !important;
+        padding: 0 !important;
+        background: linear-gradient(135deg,#00E5B8,#38C8F8) !important;
+        color: #031018 !important;
+        box-shadow: 0 16px 45px rgba(0,229,184,.45) !important;
+        border: 1px solid rgba(255,255,255,.25) !important;
+        animation: chatbotPulse 2.2s infinite;
+    }
+    @keyframes chatbotPulse {
+        0% { box-shadow: 0 0 0 0 rgba(0,229,184,.45); }
+        70% { box-shadow: 0 0 0 16px rgba(0,229,184,0); }
+        100% { box-shadow: 0 0 0 0 rgba(0,229,184,0); }
+    }
+    .st-key-chatbot_panel {
+        position: fixed !important;
+        right: 28px !important;
+        bottom: 105px !important;
+        width: 380px !important;
+        max-width: calc(100vw - 35px) !important;
+        max-height: 620px !important;
+        overflow-y: auto !important;
+        z-index: 999998 !important;
+        background: linear-gradient(145deg, rgba(7,17,31,.98), rgba(10,25,44,.96)) !important;
+        border: 1px solid rgba(0,229,184,.35) !important;
+        border-radius: 24px !important;
+        padding: 18px !important;
+        box-shadow: 0 24px 80px rgba(0,0,0,.65) !important;
+        backdrop-filter: blur(22px) !important;
+        animation: chatbotSlideUp .28s ease-out;
+    }
+    @keyframes chatbotSlideUp {
+        from { opacity: 0; transform: translateY(18px) scale(.96); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .chatbot-head {
+        display:flex; align-items:center; justify-content:space-between;
+        padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.08); margin-bottom:12px;
+    }
+    .chatbot-title {font-family:'Syne',sans-serif;font-size:18px;font-weight:900;color:white;}
+    .chatbot-role {font-size:11px;color:#00E5B8;font-weight:800;text-transform:uppercase;letter-spacing:.08em;}
+    .bot-msg, .user-msg {
+        padding:10px 12px; border-radius:16px; margin:8px 0; font-size:14px; line-height:1.55;
+    }
+    .bot-msg {background:rgba(0,229,184,.10); border:1px solid rgba(0,229,184,.18); color:#DFFDF6; border-bottom-left-radius:5px;}
+    .user-msg {background:rgba(56,200,248,.12); border:1px solid rgba(56,200,248,.18); color:#EAF8FF; border-bottom-right-radius:5px; margin-left:38px;}
+    .chatbot-hint {font-size:12px;color:#8BA0BA;margin:8px 0 10px;line-height:1.5;}
+    @media(max-width: 600px){
+        .st-key-chatbot_panel {right: 12px !important; bottom: 92px !important; width: calc(100vw - 24px) !important;}
+        .st-key-chatbot_toggle {right: 18px !important; bottom: 18px !important;}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if st.button("💬", key="chatbot_toggle", help="Open Chargevo Assistant"):
+        st.session_state.chatbot_open = not st.session_state.chatbot_open
+        st.rerun()
+
+    if st.session_state.chatbot_open:
+        with st.container(key="chatbot_panel"):
+            st.markdown(f"""
+            <div class="chatbot-head">
+                <div>
+                    <div class="chatbot-title">⚡ Chargevo Assistant</div>
+                    <div class="chatbot-role">{st.session_state.role} Profile Support</div>
+                </div>
+                <div style="font-size:22px;">🤖</div>
+            </div>
+            <div class="chatbot-hint">Ask about prediction, booking, payment, admin panel, EV bunk, analytics, or model working.</div>
+            """, unsafe_allow_html=True)
+
+            for msg in st.session_state.chatbot_messages[-8:]:
+                css_class = "user-msg" if msg["role"] == "user" else "bot-msg"
+                name = "You" if msg["role"] == "user" else "Bot"
+                safe_text = str(msg["text"]).replace("<", "&lt;").replace(">", "&gt;")
+                st.markdown(f'<div class="{css_class}"><b>{name}:</b> {safe_text}</div>', unsafe_allow_html=True)
+
+            with st.form("chargevo_chatbot_form", clear_on_submit=True):
+                user_q = st.text_input("Ask your question", placeholder="Example: How can I book a charging slot?", label_visibility="collapsed")
+                send = st.form_submit_button("Send ➤", use_container_width=True)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Clear Chat", key="clear_chatbot", use_container_width=True):
+                    st.session_state.chatbot_messages = [
+                        {"role": "assistant", "text": "Chat cleared. How can I help you with Chargevo?"}
+                    ]
+                    st.rerun()
+            with c2:
+                if st.button("Close", key="close_chatbot", use_container_width=True):
+                    st.session_state.chatbot_open = False
+                    st.rerun()
+
+            if send and user_q.strip():
+                st.session_state.chatbot_messages.append({"role": "user", "text": user_q.strip()})
+                answer = get_chargevo_bot_answer(user_q, st.session_state.role)
+                st.session_state.chatbot_messages.append({"role": "assistant", "text": answer})
+                st.rerun()
  
  
 # ─────────────────────────────────────────
@@ -1854,18 +2028,13 @@ if st.session_state.role == "Admin" and selected == "Analytics":
     def styled_fig(fig):
         fig.update_layout(
             paper_bgcolor="rgba(8,14,26,0.80)",
-            plot_bgcolor="rgba(8,14,26,0.80)",
-            font=dict(color="#FFFFFF", family="DM Sans", size=14),
-            title_font=dict(color="#FFFFFF", family="Syne", size=18),
-            legend=dict(
-                font=dict(color="#FFFFFF", size=14),
-                title_font=dict(color="#FFFFFF", size=14),
-                bgcolor="rgba(0,0,0,0)"
-            ),
-            margin=dict(l=20, r=20, t=50, b=20),
+            plot_bgcolor ="rgba(8,14,26,0.80)",
+            font=dict(color="#8BA0BA", family="DM Sans"),
+            title_font=dict(color="white", family="Syne", size=18),
+            margin=dict(l=20,r=20,t=50,b=20),
         )
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
+        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#8BA0BA"))
+        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#8BA0BA"))
         return fig
  
     state_demand = df.groupby("state")["power_consumed"].sum().sort_values(ascending=False).head(10).reset_index()
@@ -1884,8 +2053,7 @@ if st.session_state.role == "Admin" and selected == "Analytics":
     with c_left:
         fig3 = px.pie(df, names="charging_type", title="Charging Type Distribution",
                       color_discrete_sequence=["#00E5B8","#38C8F8","#F97316","#8B5CF6"])
-        fig3.update_traces(textfont=dict(color="#FFFFFF", size=14))
-        fig3.update_layout(legend=dict(font=dict(color="#FFFFFF", size=14), title_font=dict(color="#FFFFFF", size=14)))
+        fig3.update_traces(textfont_color="white")
         st.plotly_chart(styled_fig(fig3), use_container_width=True)
     with c_right:
         fig4 = px.histogram(df, x="power_consumed", nbins=30,
@@ -1911,19 +2079,13 @@ if st.session_state.role == "Admin" and selected == "Model":
  
     def styled_fig(fig):
         fig.update_layout(
-            paper_bgcolor="rgba(8,14,26,0.80)",
-            plot_bgcolor="rgba(8,14,26,0.80)",
-            font=dict(color="#FFFFFF", family="DM Sans", size=14),
-            title_font=dict(color="#FFFFFF", family="Syne", size=18),
-            legend=dict(
-                font=dict(color="#FFFFFF", size=14),
-                title_font=dict(color="#FFFFFF", size=14),
-                bgcolor="rgba(0,0,0,0)"
-            ),
-            margin=dict(l=20, r=20, t=50, b=20)
+            paper_bgcolor="rgba(8,14,26,0.80)", plot_bgcolor="rgba(8,14,26,0.80)",
+            font=dict(color="#8BA0BA", family="DM Sans"),
+            title_font=dict(color="white", family="Syne", size=18),
+            margin=dict(l=20,r=20,t=50,b=20)
         )
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(color="#FFFFFF"), title_font=dict(color="#FFFFFF"))
+        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)")
+        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)")
         return fig
  
     st.markdown('<div class="section-label">Model Comparison</div>', unsafe_allow_html=True)
@@ -2425,6 +2587,7 @@ if selected == "Contact Us":
                 st.warning("Please fill in name, email, and message.")
         st.markdown('</div>', unsafe_allow_html=True)
  
+ 
 # ═══════════════════════════════════════════
 #  FOOTER  — pure HTML (no columns glitch)
 # ═══════════════════════════════════════════
@@ -2491,3 +2654,8 @@ st.markdown("""
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+
+# Floating chatbot is visible on every logged-in page for both User and Admin
+render_floating_chatbot()
