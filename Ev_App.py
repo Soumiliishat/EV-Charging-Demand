@@ -32,7 +32,7 @@ def read_sql_df(query, params=None):
         return pd.read_sql_query(query, conn, params=params)
     finally:
         conn.close()
- 
+
 def execute_sql(query, values=None):
     conn = get_connection()
     cursor = conn.cursor()
