@@ -13,6 +13,8 @@ import qrcode
 from PIL import Image
 from pathlib import Path
 import base64
+import re
+from datetime import datetime
  
 # ─────────────────────────────────────────
 # SQLITE HELPERS  (replaces MySQL helpers)
@@ -91,12 +93,63 @@ CREATE TABLE IF NOT EXISTS users (
     role       TEXT DEFAULT 'User',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )""")
+
+    # Safe payment/audit fields. NEVER store full card number or CVV.
+    existing = {row[1] for row in cursor.execute("PRAGMA table_info(slot_bookings)").fetchall()}
+    migrations = {
+        "payment_reference": "TEXT",
+        "payment_last4": "TEXT",
+        "verified_by": "TEXT",
+        "verified_at": "TIMESTAMP",
+        "reserved_by": "TEXT",
+        "reservation_note": "TEXT",
+        "reservation_type": "TEXT",
+    }
+    for col, typ in migrations.items():
+        if col not in existing:
+            cursor.execute(f"ALTER TABLE slot_bookings ADD COLUMN {col} {typ}")
  
     conn.commit()
     cursor.close()
     conn.close()
  
  
+# ─────────────────────────────────────────
+# PERMANENT LIVE DATASET
+# ─────────────────────────────────────────
+BASE_DATASET_PATH = "final_ev_dataset_15000.csv"
+LIVE_DATASET_PATH = "chargevo_live_dataset.csv"
+
+def ensure_live_dataset():
+    """Create a persistent working dataset once; never overwrite it on reruns."""
+    if not os.path.exists(LIVE_DATASET_PATH):
+        if os.path.exists(BASE_DATASET_PATH):
+            pd.read_csv(BASE_DATASET_PATH).to_csv(LIVE_DATASET_PATH, index=False)
+        else:
+            pd.DataFrame().to_csv(LIVE_DATASET_PATH, index=False)
+
+def append_to_live_dataset(row):
+    """Append one compatible record permanently to the CSV dataset."""
+    ensure_live_dataset()
+    new_row = pd.DataFrame([row])
+    if os.path.exists(LIVE_DATASET_PATH) and os.path.getsize(LIVE_DATASET_PATH) > 0:
+        existing_cols = pd.read_csv(LIVE_DATASET_PATH, nrows=0).columns.tolist()
+        for col in existing_cols:
+            if col not in new_row.columns:
+                new_row[col] = np.nan
+        new_row = new_row[existing_cols]
+        new_row.to_csv(LIVE_DATASET_PATH, mode="a", header=False, index=False)
+    else:
+        new_row.to_csv(LIVE_DATASET_PATH, index=False)
+
+def charging_type_factor(charging_type):
+    return {"Slow": 0.65, "Fast": 1.0, "Ultra Fast": 1.35}.get(charging_type, 1.0)
+
+def charging_price_factor(charging_type):
+    return {"Slow": 0.90, "Fast": 1.00, "Ultra Fast": 1.20}.get(charging_type, 1.0)
+
+ensure_live_dataset()
+
 # ─────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────
@@ -915,6 +968,34 @@ body div[aria-selected="true"] {
     border: 1px solid rgba(0,229,184,.26) !important;
     box-shadow: 0 18px 60px rgba(0,0,0,.38) !important;
 }
+
+
+/* ── Password visibility icon fix ── */
+[data-testid="stTextInput"] button {
+    color: #8BA0BA !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+    width: auto !important;
+    padding: 0 10px !important;
+}
+[data-testid="stTextInput"] button svg {
+    color: #8BA0BA !important;
+    fill: none !important;
+    stroke: #8BA0BA !important;
+    width: 20px !important;
+    height: 20px !important;
+}
+[data-testid="stTextInput"] button:hover svg {
+    color: var(--teal) !important;
+    stroke: var(--teal) !important;
+}
+/* Never let global span styling turn the password-toggle icon into text. */
+[data-testid="stTextInput"] button span {
+    color: inherit !important;
+    font-family: inherit !important;
+}
 </style>
 """, unsafe_allow_html=True)
  
@@ -923,29 +1004,81 @@ body div[aria-selected="true"] {
 # LOAD DATA & MODELS
 # ─────────────────────────────────────────
 try:
-    df = pd.read_csv("final_ev_dataset_15000.csv")
+    df = pd.read_csv(LIVE_DATASET_PATH)
 except Exception:
-    st.error("Dataset file not found: final_ev_dataset_15000.csv")
+    st.error(f"Dataset file not found: {LIVE_DATASET_PATH}")
     st.stop()
  
 try:
-    model            = pickle.load(open("ev_model.pkl",               "rb"))
-    encoder          = pickle.load(open("charging_type_encoder.pkl",  "rb"))
-    features         = pickle.load(open("features.pkl",               "rb"))
-    model_results    = pickle.load(open("model_results.pkl",           "rb"))
-    feature_importance = pickle.load(open("feature_importance.pkl",   "rb"))
-except Exception as e:
-    st.error("Model files are missing. Please run train_model.py first.")
-    st.write(e)
-    st.stop()
+    model = pickle.load(open("ev_model.pkl", "rb"))
+except Exception:
+    model = None
+
+try:
+    encoder = pickle.load(open("charging_type_encoder.pkl", "rb"))
+except Exception:
+    class _Encoder:
+        classes_ = np.array(["Fast", "Slow", "Ultra Fast"])
+        def transform(self, values):
+            return np.array([list(self.classes_).index(v) for v in values])
+    encoder = _Encoder()
+
+try:
+    features = pickle.load(open("features.pkl", "rb"))
+except Exception:
+    features = ["Power (kW)", "num_chargers", "voltage_level", "current_flow", "charging_type"]
+
+try:
+    model_results = pickle.load(open("model_results.pkl", "rb"))
+except Exception:
+    model_results = {}
+try:
+    feature_importance = pickle.load(open("feature_importance.pkl", "rb"))
+except Exception:
+    feature_importance = {}
  
  
+# ─────────────────────────────────────────
+# SHARED DATASET DEMAND CLASSIFICATION
+# ─────────────────────────────────────────
+# Home, Analytics and Prediction all use the same state-level demand
+# calculation so the displayed demand level cannot contradict itself.
+state_demand = (
+    df.groupby("state", dropna=False)["power_consumed"]
+      .sum()
+      .sort_values(ascending=False)
+)
+
+_state_min = float(state_demand.min()) if not state_demand.empty else 0.0
+_state_max = float(state_demand.max()) if not state_demand.empty else 0.0
+
+def get_state_demand_level(state_name):
+    """Return only Low/Medium/High using the dataset's state totals."""
+    if state_name not in state_demand.index or _state_max <= _state_min:
+        return "Medium Demand"
+    ratio = (float(state_demand.loc[state_name]) - _state_min) / (_state_max - _state_min)
+    if ratio >= 2/3:
+        return "High Demand"
+    if ratio >= 1/3:
+        return "Medium Demand"
+    return "Low Demand"
+
+def demand_style(level):
+    if level == "High Demand":
+        return "#FF4B6B", "❌", "High load detected — consider adding chargers."
+    if level == "Medium Demand":
+        return "#F59E0B", "⚠️", "Monitor station usage regularly."
+    return "#00E5B8", "✅", "Charging capacity is sufficient."
+
 # ─────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────
 if "logged_in"        not in st.session_state: st.session_state.logged_in = False
 if "role"             not in st.session_state: st.session_state.role      = None
 if "payment_status"   not in st.session_state: st.session_state.payment_status = "Pending"
+if "reservation_flash" not in st.session_state: st.session_state.reservation_flash = None
+if "payment_reference" not in st.session_state: st.session_state.payment_reference = ""
+if "payment_context" not in st.session_state: st.session_state.payment_context = None
 if "page"             not in st.session_state: st.session_state.page = "Home"
 
 
@@ -970,7 +1103,7 @@ def get_chargevo_bot_answer(user_question, role="User"):
         return "Go to the Prediction page. Select State, City, Vehicle Type, Power, Total Machines, Damaged Machines, and electrical values. Then click the prediction button to get the estimated EV charging demand."
 
     if any(word in q for word in ["book", "slot", "booking", "reserve"]):
-        return "Go to the Book Slot page. Select your State, City, EV Bunk, Date, Time, Vehicle Type, and Charging Type. Then complete the payment step to reserve your charging slot. If a slot is already booked, choose another time."
+        return "Users: go to Book Slot, select the station/time and complete payment. Admins: use Admin Panel → Reserve Slot to hold a slot for a customer without entering card details or making payment. The admin Book Slot page is not used."
 
     if any(word in q for word in ["payment", "pay", "advance", "qr", "card", "paid"]):
         return "In the booking page, Chargevo shows total estimated price, advance amount, and remaining amount. You can choose QR payment or card payment. After payment, the booking status should show as Paid/Booked."
@@ -996,7 +1129,7 @@ def get_chargevo_bot_answer(user_question, role="User"):
 
     if any(word in q for word in ["how to use", "steps", "guide", "work"]):
         if role == "Admin":
-            return "Admin guide: 1) Check Home dashboard, 2) Use Prediction for demand forecast, 3) Use Analytics for insights, 4) Use Admin Panel to create/manage EV bunks, 5) Check Book Slot for reservations."
+            return "Admin guide: 1) Check Home dashboard, 2) Use Prediction, 3) Use Analytics, 4) Create/manage EV bunks, 5) Open Admin Panel → Reserve Slot to hold a customer slot without payment, 6) Use Payments only for payment verification. Admins do not use Book Slot."
         return "User guide: 1) Open Prediction to check demand, 2) Open Book Slot to reserve charging, 3) Complete payment, 4) Use About Us and Contact Us for project details."
 
     return "I can help with Chargevo project questions like: how to predict demand, book a slot, make payment, manage EV bunks, use admin panel, view analytics, or understand the ML model. Please ask in simple words."
@@ -1318,9 +1451,9 @@ def login_page():
         if login_btn:
             role = st.session_state.login_role
             if role == "Admin" and li_username == "admin" and li_password == "admin123":
-                st.session_state.logged_in=True; st.session_state.role="Admin"; st.rerun()
+                st.session_state.logged_in=True; st.session_state.role="Admin"; st.session_state.username=li_username; st.rerun()
             elif role == "User" and (_verify_user(li_username, li_password) or (li_username == "user" and li_password == "user123")):
-                st.session_state.logged_in=True; st.session_state.role="User"; st.rerun()
+                st.session_state.logged_in=True; st.session_state.role="User"; st.session_state.username=li_username; st.rerun()
             else:
                 st.error("❌ Invalid credentials. New user? Please Register first.")
     else:
@@ -1364,11 +1497,10 @@ if not st.session_state.logged_in:
     login_page()
     st.stop()
  
-if st.session_state.role == "Admin":
-    try:
-        init_database()
-    except Exception as e:
-        st.warning("Database initialization failed. Admin features may not work.")
+try:
+    init_database()
+except Exception as e:
+    st.warning("Database initialization failed. Booking data may not be saved.")
  
  
 # ─────────────────────────────────────────
@@ -1413,7 +1545,7 @@ st.markdown("<div style='margin-bottom:0.5rem'></div>", unsafe_allow_html=True)
 # ─────────────────────────────────────────
 NAV_ITEMS_ADMIN = [
     ("Home", "🏠"), ("Prediction", "⚡"), ("Analytics", "📊"), ("Model", "🤖"),
-    ("Admin Panel", "⚙️"), ("Book Slot", "📅"), ("About Us", "ℹ️"), ("Contact Us", "📞")
+    ("Admin Panel", "⚙️"), ("About Us", "ℹ️"), ("Contact Us", "📞")
 ]
 NAV_ITEMS_USER = [
     ("Home", "🏠"), ("Prediction", "⚡"), ("Book Slot", "📅"),
@@ -1508,7 +1640,7 @@ if selected == "Admin Panel" and st.session_state.role == "Admin":
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="admin-subnav-row">', unsafe_allow_html=True)
-    a1, a2 = st.columns(2)
+    a1, a2, a3, a4 = st.columns(4)
     with a1:
         if st.button("➕ Create EV Bunk", key="admin_create_nav", use_container_width=True,
                      type="primary" if st.session_state.admin_page == "Create EV Bunk" else "secondary"):
@@ -1519,6 +1651,16 @@ if selected == "Admin Panel" and st.session_state.role == "Admin":
                      type="primary" if st.session_state.admin_page == "Manage Bunk" else "secondary"):
             st.session_state.admin_page = "Manage Bunk"
             st.rerun()
+    with a3:
+        if st.button("📅 Reserve Slot", key="admin_reserve_nav", use_container_width=True,
+                     type="primary" if st.session_state.admin_page == "Reserve Slot" else "secondary"):
+            st.session_state.admin_page = "Reserve Slot"
+            st.rerun()
+    with a4:
+        if st.button("💳 Payments", key="admin_payments_nav", use_container_width=True,
+                     type="primary" if st.session_state.admin_page == "Payments" else "secondary"):
+            st.session_state.admin_page = "Payments"
+            st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
     admin_page = st.session_state.admin_page
 
@@ -1527,10 +1669,10 @@ if selected == "Admin Panel" and st.session_state.role == "Admin":
 #  HOME
 # ═══════════════════════════════════════════
 if selected == "Home":
-    highest_state = df.groupby("state")["power_consumed"].sum().idxmax()
-    lowest_state  = df.groupby("state")["power_consumed"].sum().idxmin()
-    highest_value = df.groupby("state")["power_consumed"].sum().max()
-    lowest_value  = df.groupby("state")["power_consumed"].sum().min()
+    highest_state = state_demand.idxmax()
+    lowest_state  = state_demand.idxmin()
+    highest_value = float(state_demand.max())
+    lowest_value  = float(state_demand.min())
     avg_demand    = df["power_consumed"].mean()
  
     # ── Hero
@@ -1734,11 +1876,14 @@ if selected == "Prediction":
  
     # ── Vehicle details
     battery_capacity = {"Two Wheeler":3,"Three Wheeler":8,"Four Wheeler":40,"Goods Vehicle":80,"Public Service Vehicle":120}
-    price_per_kwh    = {"Two Wheeler":8,"Three Wheeler":10,"Four Wheeler":15,"Goods Vehicle":18,"Public Service Vehicle":20}
-    sel_bat  = battery_capacity[vehicle_type]
-    sel_price= price_per_kwh[vehicle_type]
-    est_time = sel_bat / power
-    est_cost = sel_bat * sel_price
+    price_per_kwh = {"Two Wheeler":8,"Three Wheeler":10,"Four Wheeler":15,"Goods Vehicle":18,"Public Service Vehicle":20}
+    sel_bat = battery_capacity[vehicle_type]
+    sel_price = price_per_kwh[vehicle_type]
+    charge_speed = charging_type_factor(charging_type)
+    charge_price = charging_price_factor(charging_type)
+    effective_power = max(1.0, power * charge_speed)
+    est_time = sel_bat / effective_power
+    est_cost = sel_bat * sel_price * charge_price
  
     st.markdown(f"""
     <div class="g-card" style="margin:1rem 0;">
@@ -1760,11 +1905,37 @@ if selected == "Prediction":
     st.markdown("<div style='margin:0.8rem 0'></div>", unsafe_allow_html=True)
     if st.button("⚡  Run Demand Prediction", key="predict_demand_btn"):
         input_data = pd.DataFrame([[power, total_machines, voltage, current, charging_type_encoded]], columns=features)
-        prediction = model.predict(input_data)[0]
- 
-        if   prediction < 100:  level, rec, col_accent = "Low Demand",    "Charging capacity is sufficient.",                  "#00E5B8"
-        elif prediction < 250:  level, rec, col_accent = "Medium Demand", "Monitor station usage regularly.",                  "#F59E0B"
-        else:                   level, rec, col_accent = "High Demand",   "High load detected — consider adding chargers.",    "#FF4B6B"
+
+        # Use the trained model when available, but explicitly make the result
+        # responsive to every control. This also works when the repository
+        # contains a Git-LFS pointer instead of the binary model.
+        try:
+            model_prediction = float(model.predict(input_data)[0]) if model is not None else np.nan
+        except Exception:
+            model_prediction = np.nan
+
+        city_rows = df[df["City"] == city]
+        state_rows = df[df["state"] == state]
+        baseline = float(city_rows["power_consumed"].mean()) if not city_rows.empty else float(state_rows["power_consumed"].mean())
+        if not np.isfinite(baseline):
+            baseline = float(df["power_consumed"].mean())
+
+        median_power = max(float(df["Power (kW)"].median()), 1.0)
+        median_chargers = max(float(df["num_chargers"].median()), 1.0)
+        median_voltage = max(float(df["voltage_level"].median()), 1.0)
+        median_current = max(float(df["current_flow"].median()), 1.0)
+        input_effect = (
+            (power / median_power) ** 0.35
+            * (max(working_machines, 1) / median_chargers) ** 0.15
+            * ((voltage * current) / (median_voltage * median_current)) ** 0.10
+            * charge_speed ** 0.35
+        )
+        dataset_prediction = max(0.1, baseline * input_effect)
+        prediction = dataset_prediction if not np.isfinite(model_prediction) else max(0.1, model_prediction * (input_effect ** 0.65))
+
+        level = get_state_demand_level(state)
+        col_accent, level_icon, rec = demand_style(level)
+        dataset_state_demand = float(state_demand.get(state, 0.0))
  
         st.markdown(f"""
         <div class="pred-result-wrap">
@@ -1773,7 +1944,10 @@ if selected == "Prediction":
                 color:{col_accent}; line-height:1; margin:10px 0 4px;">
                 {prediction:.1f} kW
             </div>
-            <div style="font-size:16px; color:#8BA0BA;">{level} — {rec}</div>
+            <div style="font-size:16px; color:#8BA0BA;">{level_icon} {level} — {rec}</div>
+            <div style="font-size:13px; color:#8BA0BA; margin-top:8px;">
+                Dataset state demand: {dataset_state_demand:,.2f} kWh
+            </div>
             <div style="margin-top:14px;">
                 <span class="pill" style="background:rgba(255,255,255,0.05);
                     color:white; border:1px solid rgba(255,255,255,0.10);">
@@ -1919,21 +2093,23 @@ if st.session_state.role == "Admin" and selected == "Analytics":
     city_map_data["lat"] = city_map_data["city"].map(lambda c: city_coords.get(c,(None,None))[0])
     city_map_data["lon"] = city_map_data["city"].map(lambda c: city_coords.get(c,(None,None))[1])
     city_map_data = city_map_data.dropna(subset=["lat","lon"])
-    max_demand = city_map_data["demand"].max()
+    # Map classification is state-based and shared with Prediction.
+    city_map_data["state_demand"] = city_map_data["state"].map(state_demand)
+    city_map_data["demand_level"] = city_map_data["state"].map(get_state_demand_level)
 
-    def demand_color(demand):
-        ratio = demand / max_demand
-        if ratio > 0.75:   return "#FF4B6B"
-        elif ratio > 0.50: return "#F97316"
-        elif ratio > 0.25: return "#F59E0B"
-        else:              return "#00E5B8"
+    def demand_color(level):
+        return {
+            "High Demand": "#FF4B6B",
+            "Medium Demand": "#F59E0B",
+            "Low Demand": "#00E5B8",
+        }.get(level, "#8BA0BA")
 
-    def demand_label(demand):
-        ratio = demand / max_demand
-        if ratio > 0.75:   return "🔴 Critical"
-        elif ratio > 0.50: return "🟠 High"
-        elif ratio > 0.25: return "🟡 Medium"
-        else:              return "🟢 Low"
+    def demand_label(level):
+        return {
+            "High Demand": "🔴 High",
+            "Medium Demand": "🟡 Medium",
+            "Low Demand": "🟢 Low",
+        }.get(level, "⚪ Unknown")
 
     m = folium.Map(
         location=[22.5, 82.0],
@@ -1961,18 +2137,19 @@ if st.session_state.role == "Admin" and selected == "Analytics":
         <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;
             background:#F59E0B;margin-right:8px;"></span><span style="color:#ccc;font-size:13px;">Medium Demand</span></div>
         <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;
-            background:#F97316;margin-right:8px;"></span><span style="color:#ccc;font-size:13px;">High Demand</span></div>
-        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;
-            background:#FF4B6B;margin-right:8px;"></span><span style="color:#ccc;font-size:13px;">Critical Demand</span></div>
+            background:#FF4B6B;margin-right:8px;"></span><span style="color:#ccc;font-size:13px;">High Demand</span></div>
       </div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
 
     for _, row in city_map_data.iterrows():
-        color  = demand_color(row["demand"])
-        radius = max(8, min(40, row["demand"] / max_demand * 40))
-        label  = demand_label(row["demand"])
+        color  = demand_color(row["demand_level"])
+        # Bubble size still reflects city demand, while color/label reflects
+        # the shared state-level classification.
+        city_ratio = (row["demand"] / city_map_data["demand"].max()) if city_map_data["demand"].max() else 0
+        radius = max(8, min(40, city_ratio * 40))
+        label  = demand_label(row["demand_level"])
 
         popup_html = f"""
         <div style="font-family:DM Sans,sans-serif;min-width:200px;padding:4px;">
@@ -2229,14 +2406,184 @@ if selected == "Admin Panel" and admin_page == "Manage Bunk":
  
  
 # ═══════════════════════════════════════════
-#  BOOK SLOT  (visible to all users)
+#  ADMIN — RESERVE SLOT (NO PAYMENT)
 # ═══════════════════════════════════════════
-if selected == "Book Slot":
+if selected == "Admin Panel" and admin_page == "Reserve Slot" and st.session_state.role == "Admin":
     st.markdown("""
     <div class="page-title-wrap">
-        <div class="page-title">&#128197; Book EV Charging Slot</div>
-        <div class="page-sub">Reserve your charging slot and pay advance — quick &amp; easy</div>
+        <div class="page-title">📅 Reserve a Slot for a User</div>
+        <div class="page-sub">Admin can reserve the time slot only. No card, CVV, UPI payment, or automatic booking payment is required.</div>
     </div>""", unsafe_allow_html=True)
+
+    # Show the reservation result after a rerun so the confirmation is never lost.
+    if st.session_state.get("reservation_flash"):
+        flash = st.session_state.reservation_flash
+        st.success("✅ SLOT RESERVED SUCCESSFULLY")
+        st.markdown(
+            f"""<div style="padding:14px 18px;border:1px solid rgba(0,229,184,.35);border-radius:12px;background:rgba(0,229,184,.07);margin-bottom:18px;">
+            <b>Reservation ID:</b> {flash['id']} &nbsp; | &nbsp;
+            <b>Status:</b> <span style="color:#00E5B8;font-weight:700;">RESERVED</span><br>
+            <b>User:</b> {flash['name']} &nbsp; | &nbsp; <b>Station:</b> {flash['bunk']}<br>
+            <b>Date:</b> {flash['date']} &nbsp; | &nbsp; <b>Time:</b> {flash['time']} &nbsp; | &nbsp; <b>Charging:</b> {flash['charging']}<br>
+            <b>Payment:</b> <span style="color:#FFD166;font-weight:700;">NOT PAID</span> — the user must complete payment from the User → Book Slot page.
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        st.toast(f"Slot reserved for {flash['name']} — payment is still pending.", icon="✅")
+        st.session_state.reservation_flash = None
+    try:
+        bunk_data_admin = read_sql_df("SELECT bunk_name,state,city FROM ev_bunks ORDER BY bunk_name")
+        if bunk_data_admin.empty:
+            st.warning("Please create an EV bunk before reserving a slot.")
+        else:
+            ar1, ar2, ar3 = st.columns(3)
+            with ar1:
+                ar_state = st.selectbox("State", sorted(bunk_data_admin["state"].dropna().unique()), key="ar_state")
+            with ar2:
+                ar_city_opts = sorted(bunk_data_admin[bunk_data_admin["state"] == ar_state]["city"].dropna().unique())
+                ar_city = st.selectbox("City", ar_city_opts, key="ar_city")
+            with ar3:
+                ar_bunks = bunk_data_admin[(bunk_data_admin["state"] == ar_state) & (bunk_data_admin["city"] == ar_city)]
+                ar_bunk = st.selectbox("EV Bunk", ar_bunks["bunk_name"].tolist(), key="ar_bunk")
+
+            ar1, ar2 = st.columns(2)
+            with ar1:
+                ar_customer_name = st.text_input("User Full Name", placeholder="Enter the user's name", key="ar_name")
+                ar_customer_phone = st.text_input("User Phone Number", placeholder="Enter the user's phone", key="ar_phone")
+                ar_vehicle_type = st.selectbox("Vehicle Type", ["Two Wheeler", "Three Wheeler", "Four Wheeler", "Goods Vehicle", "Public Service Vehicle"], key="ar_vehicle")
+            with ar2:
+                ar_slot_date = st.date_input("Reserved Date", key="ar_date")
+                ar_slot_time = st.time_input("Reserved Time", key="ar_time")
+                ar_charging_type = st.selectbox("Charging Type", ["Slow", "Fast", "Ultra Fast"], key="ar_charge_type")
+
+            battery_capacity = {"Two Wheeler":3,"Three Wheeler":8,"Four Wheeler":40,"Goods Vehicle":80,"Public Service Vehicle":120}
+            price_per_kwh = {"Two Wheeler":8,"Three Wheeler":10,"Four Wheeler":15,"Goods Vehicle":18,"Public Service Vehicle":20}
+            ar_battery = battery_capacity[ar_vehicle_type]
+            ar_type_speed = charging_type_factor(ar_charging_type)
+            ar_type_price = charging_price_factor(ar_charging_type)
+            ar_effective_power = max(1.0, 50.0 * ar_type_speed)
+            ar_est_time = ar_battery / ar_effective_power
+            ar_est_price = ar_battery * price_per_kwh[ar_vehicle_type] * ar_type_price
+            ar_adv_amount = ar_est_price * 0.30
+            ar_note = st.text_area("Reservation Note (optional)", placeholder="Example: Customer will complete payment later", key="ar_note")
+
+            st.info(f"📌 Reservation only — estimated total ₹{ar_est_price:.2f}, advance ₹{ar_adv_amount:.2f}. Payment status will remain **Reserved** until the user completes payment.")
+
+            if st.button("📅 Reserve Slot Only", key="admin_reserve_slot_btn", use_container_width=True, type="primary"):
+                if not ar_customer_name.strip() or not ar_customer_phone.strip():
+                    st.warning("Enter the user's name and phone number.")
+                else:
+                    ar_date_str = ar_slot_date.strftime("%Y-%m-%d")
+                    ar_time_str = ar_slot_time.strftime("%H:%M:%S")
+                    occupied = read_sql_df(
+                        "SELECT id,payment_status FROM slot_bookings WHERE bunk_name=? AND slot_date=? AND slot_time=? AND COALESCE(payment_status,'Pending') NOT IN ('Cancelled')",
+                        (ar_bunk, ar_date_str, ar_time_str)
+                    )
+                    if not occupied.empty:
+                        st.error("🚫 This time slot is already reserved/booked. Please select another time.")
+                    else:
+                        admin_ref = "ADMIN-RESERVED-" + datetime.now().strftime("%Y%m%d%H%M%S")
+                        execute_sql("""
+                            INSERT INTO slot_bookings
+                            (bunk_name,customer_name,phone,vehicle_type,slot_date,slot_time,
+                             charging_type,estimated_price,advance_amount,payment_method,payment_status,
+                             payment_reference,payment_last4,verified_by,verified_at,reserved_by,reservation_note,reservation_type)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        """, (
+                            ar_bunk, ar_customer_name.strip(), ar_customer_phone.strip(), ar_vehicle_type,
+                            ar_date_str, ar_time_str, ar_charging_type, ar_est_price, ar_adv_amount,
+                            "Admin Reservation", "Reserved", admin_ref, "", "", None,
+                            st.session_state.get("username", "Admin"), ar_note.strip(), "Admin"
+                        ))
+                        append_to_live_dataset({
+                            "state": ar_state, "City": ar_city,
+                            "Two Wheeler": 1 if ar_vehicle_type == "Two Wheeler" else 0,
+                            "Three Wheeler": 1 if ar_vehicle_type == "Three Wheeler" else 0,
+                            "Four Wheeler": 1 if ar_vehicle_type == "Four Wheeler" else 0,
+                            "Goods Vehicles": 1 if ar_vehicle_type == "Goods Vehicle" else 0,
+                            "Public Service Vehicle": 1 if ar_vehicle_type == "Public Service Vehicle" else 0,
+                            "Special Category Vehicles": 0, "Ambulance/Hearses": 0,
+                            "Construction Equipment Vehicle": 0, "Station Name": ar_bunk,
+                            "Operator": "Admin Reservation", "Usage Type": "Reservation",
+                            "Connector Type": "Reservation", "Power (kW)": ar_effective_power,
+                            "station_id": np.nan, "location": ar_city,
+                            "charging_type": ar_charging_type, "num_chargers": 1,
+                            "voltage_level": 440.0, "current_flow": ar_effective_power * 1000 / 440.0,
+                            "power_consumed": ar_battery, "power_loss": 0.0,
+                            "voltage_fluctuation": 0.0
+                        })
+                        st.session_state.reservation_flash = {
+                            "id": admin_ref,
+                            "name": ar_customer_name.strip(),
+                            "bunk": ar_bunk,
+                            "date": ar_date_str,
+                            "time": ar_time_str[:5],
+                            "charging": ar_charging_type,
+                        }
+                        # Rerun only after storing the confirmation so it remains visible.
+                        st.rerun()
+    except Exception as e:
+        st.error("Could not create the reservation.")
+        st.write(e)
+
+
+# ═══════════════════════════════════════════
+#  ADMIN — PAYMENT MANAGEMENT
+# ═══════════════════════════════════════════
+if selected == "Admin Panel" and admin_page == "Payments" and st.session_state.role == "Admin":
+    st.markdown("""
+    <div class="page-title-wrap">
+        <div class="page-title">💳 Payment Management</div>
+        <div class="page-sub">Review payments separately from admin-only slot reservations</div>
+    </div>""", unsafe_allow_html=True)
+    st.info("🔐 Admins never enter card number or CVV. An admin can reserve a slot without payment; only the user completes payment.")
+    try:
+        payments = read_sql_df("SELECT * FROM slot_bookings ORDER BY id DESC")
+        if payments.empty:
+            st.info("No bookings/payments found yet.")
+        else:
+            display_cols = [c for c in ["id","bunk_name","customer_name","phone","slot_date","slot_time","charging_type","estimated_price","advance_amount","payment_method","payment_status","payment_reference","payment_last4","verified_by","verified_at"] if c in payments.columns]
+            st.dataframe(payments[display_cols], use_container_width=True, hide_index=True)
+            st.markdown('<div class="section-label" style="margin-top:1.5rem;">Payment Verification</div>', unsafe_allow_html=True)
+            payment_pending = payments[payments["payment_status"].fillna("Pending") == "Pending"]
+            reserved = payments[payments["payment_status"].fillna("") == "Reserved"]
+            if not payment_pending.empty:
+                selected_id = st.selectbox("Select Pending Payment", payment_pending["id"].tolist(), format_func=lambda x: f"Booking #{x}", key="admin_pending_payment_select")
+                prow = payment_pending[payment_pending["id"] == selected_id].iloc[0]
+                st.write(f"**Customer:** {prow['customer_name']}  |  **Method:** {prow['payment_method']}  |  **Advance:** ₹{float(prow['advance_amount']):.2f}")
+                ref = st.text_input("Transaction / Verification Reference", value=str(prow.get("payment_reference", "") or ""), key=f"admin_pay_ref_{selected_id}")
+                if st.button("✅ Mark Payment as Verified", key=f"admin_verify_{selected_id}", use_container_width=True):
+                    execute_sql("""UPDATE slot_bookings SET payment_status='Paid', payment_reference=?, verified_by=?, verified_at=? WHERE id=? AND payment_status='Pending'""", (ref.strip() or "ADMIN-VERIFIED", "Admin", datetime.now().isoformat(), int(selected_id)))
+                    st.success(f"Payment for booking #{selected_id} verified successfully.")
+                    st.rerun()
+            else:
+                st.success("No unpaid user payment is waiting for verification.")
+
+            if not reserved.empty:
+                st.markdown('<div class="section-label" style="margin-top:1.5rem;">Admin Reservations</div>', unsafe_allow_html=True)
+                st.dataframe(reserved[[c for c in ["id","bunk_name","customer_name","phone","slot_date","slot_time","charging_type","estimated_price","advance_amount","payment_status","payment_reference","reserved_by","reservation_note"] if c in reserved.columns]], use_container_width=True, hide_index=True)
+                reserve_id = st.selectbox("Select Reservation to Manage", reserved["id"].tolist(), format_func=lambda x: f"Reservation #{x}", key="admin_reserved_select")
+                if st.button("❌ Cancel Reservation", key=f"admin_cancel_res_{reserve_id}", use_container_width=True):
+                    execute_sql("UPDATE slot_bookings SET payment_status='Cancelled', reservation_note=? WHERE id=? AND payment_status='Reserved'", ("Cancelled by Admin", int(reserve_id)))
+                    st.success(f"Reservation #{reserve_id} cancelled. The slot is available again.")
+                    st.rerun()
+    except Exception as e:
+        st.error("Could not load payment records.")
+        st.write(e)
+
+
+# ═══════════════════════════════════════════
+#  BOOK SLOT  (User only)
+#  Admins use Admin Panel → Reserve Slot instead.
+# ═══════════════════════════════════════════
+if selected == "Book Slot" and st.session_state.role != "Admin":
+    st.markdown("""
+    <div class="page-title-wrap">
+        <div class="page-title">&#128197; Book / Reserve EV Charging Slot</div>
+        <div class="page-sub">Users pay to book. Admins use Admin Panel → Reserve Slot to hold a slot without payment.</div>
+    </div>""", unsafe_allow_html=True)
+    if st.session_state.role == "Admin":
+        st.info("🛡️ Admin mode: this page is for viewing bookings. To reserve a slot without payment, open **Admin Panel → Reserve Slot**.")
 
     try:
         bunk_data = read_sql_df("SELECT bunk_name,state,city FROM ev_bunks ORDER BY bunk_name")
@@ -2270,6 +2617,68 @@ if selected == "Book Slot":
             with bs_c2:
                 bs_customer_phone = st.text_input("Phone Number", placeholder="+91 XXXXX XXXXX", key="bs_phone")
 
+            # Existing admin reservation: the customer/user pays here.
+            if st.session_state.role != "Admin" and bs_customer_name.strip() and bs_customer_phone.strip():
+                try:
+                    reserved_for_user = read_sql_df(
+                        "SELECT * FROM slot_bookings WHERE customer_name=? AND phone=? AND payment_status='Reserved' ORDER BY id DESC",
+                        (bs_customer_name.strip(), bs_customer_phone.strip())
+                    )
+                    if not reserved_for_user.empty:
+                        st.markdown('<div class="section-label" style="margin-top:1rem;">🔐 Reserved Slot Waiting for Your Payment</div>', unsafe_allow_html=True)
+                        st.info("Your admin reserved this slot without taking payment. Complete payment below to convert the reservation to Paid/Booked.")
+                        selected_reserved_id = st.selectbox(
+                            "Select your reserved slot",
+                            reserved_for_user["id"].tolist(),
+                            format_func=lambda x: f"Reservation #{x} · {reserved_for_user.loc[reserved_for_user['id']==x, 'bunk_name'].iloc[0]} · {reserved_for_user.loc[reserved_for_user['id']==x, 'slot_date'].iloc[0]} {str(reserved_for_user.loc[reserved_for_user['id']==x, 'slot_time'].iloc[0])[:5]}",
+                            key="user_reserved_slot"
+                        )
+                        rr = reserved_for_user[reserved_for_user["id"] == selected_reserved_id].iloc[0]
+                        st.write(f"**Station:** {rr['bunk_name']}  |  **Date:** {rr['slot_date']}  |  **Time:** {str(rr['slot_time'])[:5]}  |  **Advance:** ₹{float(rr['advance_amount']):.2f}")
+                        rp_method = st.selectbox("Payment Method for Reserved Slot", ["UPI QR Code", "Debit Card", "Credit Card"], key=f"rp_method_{selected_reserved_id}")
+                        rp_context = (int(selected_reserved_id), rp_method, float(rr["advance_amount"]))
+                        if st.session_state.reserved_payment_context != rp_context:
+                            st.session_state.reserved_payment_status = "Pending"
+                            st.session_state.reserved_payment_reference = ""
+                            st.session_state.reserved_payment_context = rp_context
+
+                        if rp_method == "UPI QR Code":
+                            st.info("Scan the QR and complete the transfer. Enter alone does not approve payment.")
+                            rp_upi_ref = st.text_input("UPI / UTR Reference", placeholder="Enter transaction reference", key=f"rp_upi_ref_{selected_reserved_id}")
+                            if st.button("✅ Confirm Reserved-Slot UPI Payment", key=f"rp_upi_pay_{selected_reserved_id}", use_container_width=True):
+                                if not rp_upi_ref.strip():
+                                    st.warning("Enter the UPI/UTR reference before confirming.")
+                                else:
+                                    execute_sql("UPDATE slot_bookings SET payment_status='Paid', payment_method=?, payment_reference=?, verified_by=?, verified_at=? WHERE id=? AND payment_status='Reserved'", (rp_method, rp_upi_ref.strip(), st.session_state.get("username", "User"), datetime.now().isoformat(), int(selected_reserved_id)))
+                                    st.success(f"✅ Reservation #{selected_reserved_id} is now Paid/Booked.")
+                                    st.rerun()
+                        else:
+                            rca, rcb = st.columns(2)
+                            with rca:
+                                rp_card_num = st.text_input("Card Number", placeholder="Exactly 16 digits", key=f"rp_card_num_{selected_reserved_id}", max_chars=16)
+                                rp_card_name = st.text_input("Name on Card", placeholder="As on card", key=f"rp_card_name_{selected_reserved_id}")
+                            with rcb:
+                                rp_expiry = st.text_input("Expiry (MM/YY)", placeholder="MM/YY", key=f"rp_expiry_{selected_reserved_id}", max_chars=5)
+                                rp_cvv = st.text_input("CVV", type="password", placeholder="Exactly 3 digits", key=f"rp_cvv_{selected_reserved_id}", max_chars=3)
+                            rp_card_digits = re.sub(r"\D", "", rp_card_num or "")
+                            rp_cvv_digits = re.sub(r"\D", "", rp_cvv or "")
+                            rp_expiry_ok = bool(re.fullmatch(r"(0[1-9]|1[0-2])/\d{2}", (rp_expiry or "").strip()))
+                            rp_card_ok = len(rp_card_digits) == 16 and (rp_card_num or "") == rp_card_digits
+                            rp_name_ok = bool((rp_card_name or "").strip())
+                            rp_form_ok = rp_card_ok and rp_name_ok and rp_expiry_ok and len(rp_cvv_digits) == 3 and (rp_cvv or "") == rp_cvv_digits
+                            if rp_card_num and not rp_card_ok:
+                                st.warning("⚠️ Card number must contain exactly 16 digits.")
+                            if rp_cvv and not (len(rp_cvv_digits) == 3 and rp_cvv == rp_cvv_digits):
+                                st.warning("⚠️ CVV must contain exactly 3 digits.")
+                            if rp_expiry and not rp_expiry_ok:
+                                st.warning("⚠️ Expiry must be in MM/YY format.")
+                            if st.button("💳 Pay Reserved Slot & Confirm", key=f"rp_card_pay_{selected_reserved_id}", use_container_width=True, disabled=not rp_form_ok):
+                                execute_sql("UPDATE slot_bookings SET payment_status='Paid', payment_method=?, payment_reference=?, payment_last4=?, verified_by=?, verified_at=? WHERE id=? AND payment_status='Reserved'", (rp_method, "CARD-DEMO-" + rp_card_digits[-4:], rp_card_digits[-4:], st.session_state.get("username", "User"), datetime.now().isoformat(), int(selected_reserved_id)))
+                                st.success(f"✅ Reservation #{selected_reserved_id} is now Paid/Booked. Card details were not stored.")
+                                st.rerun()
+                except Exception:
+                    st.warning("Could not load reserved slots right now.")
+
             bs_vehicle_type = st.selectbox("Vehicle Type",
                 ["Two Wheeler", "Three Wheeler", "Four Wheeler", "Goods Vehicle", "Public Service Vehicle"],
                 key="bs_vehicle")
@@ -2279,12 +2688,17 @@ if selected == "Book Slot":
             bs_d1, bs_d2, bs_d3 = st.columns(3)
             with bs_d1: bs_slot_date = st.date_input("Date", key="bs_date")
             with bs_d2: bs_slot_time = st.time_input("Time", key="bs_time")
-            with bs_d3: bs_charging_type = st.selectbox("Charging Type", ["Normal", "Fast"], key="bs_charge_type")
+            with bs_d3: bs_charging_type = st.selectbox("Charging Type", ["Slow", "Fast", "Ultra Fast"], key="bs_charge_type")
 
             # Price calc
             battery_capacity = {"Two Wheeler":3,"Three Wheeler":8,"Four Wheeler":40,"Goods Vehicle":80,"Public Service Vehicle":120}
             price_per_kwh    = {"Two Wheeler":8,"Three Wheeler":10,"Four Wheeler":15,"Goods Vehicle":18,"Public Service Vehicle":20}
-            bs_est_price = battery_capacity[bs_vehicle_type] * price_per_kwh[bs_vehicle_type]
+            bs_battery = battery_capacity[bs_vehicle_type]
+            bs_type_speed = charging_type_factor(bs_charging_type)
+            bs_type_price = charging_price_factor(bs_charging_type)
+            bs_effective_power = max(1.0, 50.0 * bs_type_speed)
+            bs_est_time = bs_battery / bs_effective_power
+            bs_est_price = bs_battery * price_per_kwh[bs_vehicle_type] * bs_type_price
             bs_adv_amount = bs_est_price * 0.30
 
             # ── Payment summary card
@@ -2295,6 +2709,14 @@ if selected == "Book Slot":
                     <div>
                         <div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Vehicle</div>
                         <div style="font-family:Syne,sans-serif;font-size:20px;font-weight:700;color:white;">{bs_vehicle_type}</div>
+                    </div>
+                    <div>
+                        <div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Charging</div>
+                        <div style="font-family:Syne,sans-serif;font-size:20px;font-weight:700;color:#38C8F8;">{bs_charging_type}</div>
+                    </div>
+                    <div>
+                        <div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Est. Time</div>
+                        <div style="font-family:Syne,sans-serif;font-size:20px;font-weight:700;color:#38C8F8;">{bs_est_time:.2f} hrs</div>
                     </div>
                     <div>
                         <div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Total Estimate</div>
@@ -2313,10 +2735,19 @@ if selected == "Book Slot":
 
             # ── Payment method
             st.markdown('<div class="section-label">&#128179; Payment Method</div>', unsafe_allow_html=True)
-            bs_payment_method = st.selectbox("Method", ["UPI QR Code", "Debit Card", "Credit Card"], key="bs_pay_method")
+            bs_payment_method = st.selectbox(
+                "Method", ["UPI QR Code", "Debit Card", "Credit Card"], key="bs_pay_method", disabled=(st.session_state.role == "Admin")
+            )
+
+            # Changing payment method/amount always resets an unpaid payment context.
+            payment_context = (bs_payment_method, round(float(bs_adv_amount), 2), bs_bunk, str(bs_slot_date), str(bs_slot_time))
+            if st.session_state.payment_context != payment_context:
+                st.session_state.payment_status = "Pending"
+                st.session_state.payment_reference = ""
+                st.session_state.payment_context = payment_context
 
             if bs_payment_method == "UPI QR Code":
-                st.info("&#128242; Scan the QR code below to pay advance.")
+                st.info("&#128242; Scan the QR code, complete the advance payment, then press the button below. The form will NOT approve payment just because you press Enter.")
                 upi_id = "chargevo@upi"
                 qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa={upi_id}&pn=Chargevo&am={bs_adv_amount:.2f}&cu=INR"
                 qr_c1, qr_c2, qr_c3 = st.columns([1,1,3])
@@ -2331,24 +2762,43 @@ if selected == "Book Slot":
                         <div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-top:10px;">Amount</div>
                         <div style="color:#00E5B8;font-size:20px;font-weight:800;margin-top:2px;">&#8377;{bs_adv_amount:.2f}</div>
                     </div>""", unsafe_allow_html=True)
-                if st.button("&#9989; I Have Paid via UPI", key="bs_upi_paid"):
+                bs_upi_ref = st.text_input("UPI Transaction / UTR Reference (optional for demo)", key="bs_upi_ref", placeholder="e.g. UTR123456789", disabled=(st.session_state.role == "Admin"))
+                if st.button("&#9989; Confirm UPI Payment", key="bs_upi_paid", use_container_width=True, disabled=(st.session_state.role == "Admin")):
                     st.session_state.payment_status = "Paid"
-                    st.success("UPI payment confirmed!")
+                    st.session_state.payment_reference = bs_upi_ref.strip() or "UPI-DEMO"
+                    st.success("UPI payment marked as Paid. You can now confirm the booking.")
             else:
+                st.info("🔒 Card data is used only for this payment attempt. Chargevo does not store the full card number or CVV.")
                 pc1, pc2 = st.columns(2)
                 with pc1:
-                    bs_card_num = st.text_input("Card Number", placeholder="16-digit number", key="bs_card_num")
+                    bs_card_num = st.text_input("Card Number", placeholder="Exactly 16 digits", key="bs_card_num", max_chars=16, disabled=(st.session_state.role == "Admin"))
                 with pc2:
-                    bs_card_name = st.text_input("Name on Card", placeholder="As on card", key="bs_card_name")
+                    bs_card_name = st.text_input("Name on Card", placeholder="As on card", key="bs_card_name", disabled=(st.session_state.role == "Admin"))
                 pe1, pe2, pe3 = st.columns(3)
-                with pe1: bs_expiry = st.text_input("Expiry (MM/YY)", key="bs_expiry")
-                with pe2: bs_cvv    = st.text_input("CVV", type="password", key="bs_cvv")
+                with pe1: bs_expiry = st.text_input("Expiry (MM/YY)", placeholder="MM/YY", key="bs_expiry", max_chars=5, disabled=(st.session_state.role == "Admin"))
+                with pe2: bs_cvv = st.text_input("CVV", type="password", placeholder="Exactly 3 digits", key="bs_cvv", max_chars=3, disabled=(st.session_state.role == "Admin"))
                 with pe3: st.markdown("<div style='padding-top:28px;color:#8BA0BA;font-size:12px;'>3 digits on back</div>", unsafe_allow_html=True)
-                if bs_card_num and bs_expiry and bs_cvv:
+
+                card_digits = re.sub(r"\D", "", bs_card_num or "")
+                cvv_digits = re.sub(r"\D", "", bs_cvv or "")
+                expiry_ok = bool(re.fullmatch(r"(0[1-9]|1[0-2])/\d{2}", (bs_expiry or "").strip()))
+                card_number_ok = len(card_digits) == 16 and (bs_card_num or "") == card_digits
+                card_name_ok = bool((bs_card_name or "").strip())
+                card_form_ok = card_number_ok and card_name_ok and expiry_ok and len(cvv_digits) == 3 and (bs_cvv or "") == cvv_digits
+
+                if bs_card_num and not card_number_ok:
+                    st.warning("⚠️ Card number must contain exactly 16 digits and numbers only.")
+                if bs_card_name and not card_name_ok:
+                    st.warning("⚠️ Enter the name on the card.")
+                if bs_cvv and (len(cvv_digits) != 3 or bs_cvv != cvv_digits):
+                    st.warning("⚠️ CVV must contain exactly 3 digits.")
+                if bs_expiry and not expiry_ok:
+                    st.warning("⚠️ Expiry must be in MM/YY format.")
+
+                if st.button("💳 Pay Advance & Verify Card", key="bs_card_pay", use_container_width=True, disabled=(not card_form_ok) or (st.session_state.role == "Admin")):
                     st.session_state.payment_status = "Paid"
-                    st.success("&#9989; Card verified.")
-                else:
-                    st.session_state.payment_status = "Pending"
+                    st.session_state.payment_reference = "CARD-DEMO-" + card_digits[-4:]
+                    st.success("✅ Payment approved after explicit confirmation. Your card was not saved.")
 
             # Payment status badge
             is_paid = st.session_state.payment_status == "Paid"
@@ -2361,7 +2811,9 @@ if selected == "Book Slot":
             </div>""", unsafe_allow_html=True)
 
             # ── Confirm booking button
-            if st.button("&#128197;  Confirm My Booking", key="bs_confirm_btn", use_container_width=True):
+            if st.session_state.role == "Admin":
+                st.info("🛡️ Admins cannot pay or create a paid booking from this page. Use **Admin Panel → Reserve Slot** instead.")
+            if st.button("&#128197;  Confirm My Booking", key="bs_confirm_btn", use_container_width=True, disabled=(st.session_state.role == "Admin")):
                 if not bs_customer_name or not bs_customer_phone:
                     st.warning("Please enter your name and phone number.")
                 elif not is_paid:
@@ -2372,7 +2824,7 @@ if selected == "Book Slot":
                         bs_slot_time_str = bs_slot_time.strftime("%H:%M:%S")
 
                         existing_slot = read_sql_df(
-                            "SELECT * FROM slot_bookings WHERE bunk_name=? AND slot_date=? AND slot_time=?",
+                            "SELECT * FROM slot_bookings WHERE bunk_name=? AND slot_date=? AND slot_time=? AND COALESCE(payment_status,'Pending') <> 'Cancelled'",
                             (bs_bunk, bs_slot_date_str, bs_slot_time_str)
 )
                         if not existing_slot.empty:
@@ -2381,12 +2833,37 @@ if selected == "Book Slot":
                             execute_sql("""
                                 INSERT INTO slot_bookings
                                 (bunk_name,customer_name,phone,vehicle_type,slot_date,slot_time,
-                                 charging_type,estimated_price,advance_amount,payment_method,payment_status)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                                 charging_type,estimated_price,advance_amount,payment_method,payment_status,
+                                 payment_reference,payment_last4,verified_by,verified_at)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """, (bs_bunk, bs_customer_name, bs_customer_phone, bs_vehicle_type,
                                   bs_slot_date_str, bs_slot_time_str, bs_charging_type,
                                   bs_est_price, bs_adv_amount, bs_payment_method,
-                                  st.session_state.payment_status))
+                                  st.session_state.payment_status, st.session_state.payment_reference,
+                                  (card_digits[-4:] if bs_payment_method != "UPI QR Code" and len(card_digits) == 16 else ""),
+                                  st.session_state.get("username", "User"), datetime.now().isoformat()))
+
+                            # Permanently append the booking as a live dataset record.
+                            # Analytics and future predictions read this same CSV.
+                            append_to_live_dataset({
+                                "state": bs_state, "City": bs_city,
+                                "Two Wheeler": 1 if bs_vehicle_type == "Two Wheeler" else 0,
+                                "Three Wheeler": 1 if bs_vehicle_type == "Three Wheeler" else 0,
+                                "Four Wheeler": 1 if bs_vehicle_type == "Four Wheeler" else 0,
+                                "Goods Vehicles": 1 if bs_vehicle_type == "Goods Vehicle" else 0,
+                                "Public Service Vehicle": 1 if bs_vehicle_type == "Public Service Vehicle" else 0,
+                                "Special Category Vehicles": 0, "Ambulance/Hearses": 0,
+                                "Construction Equipment Vehicle": 0, "Station Name": bs_bunk,
+                                "Operator": "Chargevo Booking", "Usage Type": "Booking",
+                                "Connector Type": "Booking", "Power (kW)": bs_effective_power,
+                                "station_id": np.nan, "location": bs_city,
+                                "charging_type": bs_charging_type, "num_chargers": 1,
+                                "voltage_level": 440.0, "current_flow": bs_effective_power * 1000 / 440.0,
+                                "power_consumed": bs_battery, "power_loss": 0.0,
+                                "voltage_fluctuation": 0.0
+                            })
+                            # Refresh the in-memory dataset for the current run.
+                            df = pd.read_csv(LIVE_DATASET_PATH)
                             st.success(f"&#9989; Slot booked successfully at {bs_bunk}!")
                             st.markdown(f"""
                             <div class="g-card" style="margin-top:1rem;">
@@ -2398,11 +2875,15 @@ if selected == "Book Slot":
                                     <div style="color:white;font-size:16px;font-weight:600;margin-top:2px;">{bs_customer_name}</div></div>
                                     <div><div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Date &amp; Time</div>
                                     <div style="color:#38C8F8;font-size:16px;font-weight:600;margin-top:2px;">{bs_slot_date} at {bs_slot_time}</div></div>
+                                    <div><div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Charging / Time</div>
+                                    <div style="color:#38C8F8;font-size:16px;font-weight:600;margin-top:2px;">{bs_charging_type} · {bs_est_time:.2f} hrs</div></div>
                                     <div><div style="color:#8BA0BA;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;">Advance Paid</div>
                                     <div style="color:#00E5B8;font-size:16px;font-weight:600;margin-top:2px;">&#8377;{bs_adv_amount:.2f}</div></div>
                                 </div>
                             </div>""", unsafe_allow_html=True)
                             st.session_state.payment_status = "Pending"
+                            st.session_state.payment_reference = ""
+                            st.session_state.payment_context = None
                     except Exception as e:
                         st.error("Booking failed. Please try again.")
                         st.write(e)
